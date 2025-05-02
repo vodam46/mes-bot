@@ -109,24 +109,24 @@ magic_t find_magic(int sq, int bishop) {
 }
 
 int magics_generated = 0;
-void generate_magics() {
+void generate_magics(void) {
 	if (magics_generated) return;
 	magics_generated = 1;
 	int seed = time(NULL);
-	seed = 1745841240;
-	printf("%d\n", seed);
+	// seed = 1745841240;
+	// printf("%d\n", seed);
 	srand(seed);
-	printf("rooks\n");
+	// printf("rooks\n");
 	for (int square = 0; square < 64; square++) {
 		magic_t m = find_magic(square, 0);
 		rook_magics[square] = m;
 	}
-	printf("bishops\n");
+	// printf("bishops\n");
 	for (int square = 0; square < 64; square++) {
 		magic_t m = find_magic(square, 1);
 		bishop_magics[square] = m;
 	}
-	printf("magics generated\n");
+	// printf("magics generated\n");
 }
 
 bitboard_t get_rook_attacks(int square, bitboard_t blockers) {

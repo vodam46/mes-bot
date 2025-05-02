@@ -3,6 +3,7 @@
 
 #include "engine.h"
 #include "chess.h"
+#include "uci.h"
 
 int mg_value[6] = { 82, 337, 365, 477, 1025,  0};
 int eg_value[6] = { 94, 281, 297, 512,  936,  0};
@@ -162,7 +163,7 @@ int* eg_pesto_table[6] =
     eg_king_table
 };
 
-int gamephaseInc[12] = {0,0,1,1,1,1,2,2,4,4,0,0};
+int gamephaseInc[12] = {0,1,1,2,4,0};
 int mg_table[12][64];
 int eg_table[12][64];
 
@@ -181,7 +182,7 @@ void init_piece_square_tables(void) {
 int evaluate(chessboard_t* b) {
 	game_result_t game_res = game_result(b);
 	if (game_res == draw) return 0;
-	if (game_res == checkmate) return -INT_MAX;
+	if (game_res == checkmate) return b->fullmove-INT_MAX;
 	int mg[2] = {0, 0};
 	int eg[2] = {0, 0};
 	int phase = 0;
@@ -205,22 +206,15 @@ int evaluate(chessboard_t* b) {
 	}
 	int mgScore = mg[b->side] - mg[!b->side];
 	int egScore = eg[b->side] - eg[!b->side];
-	// printf("%d %d %d\n", mgScore, egScore, phase);
 	if (phase > 24) return mgScore;
 	return (mgScore*phase + egScore*(24-phase))/24;
 }
 
-// TODO: transposition tables
 best_move_t negamax(chessboard_t* b, int alpha, int beta, unsigned depth) {
 	if (depth == 0 || (game_result(b) != ongoing))
 		return (best_move_t){.move=0, .score=evaluate(b)};
 	best_move_t bm = {.move=0, .score=INT_MIN};
 	moves_t moves = generate_moves(b);
-	// if (moves.num_moves == 0) {
-	// 	bm.score = (b->pieces[wking + 6*b->side] & get_attacked_squares(b))
-	// 		? -INT_MAX
-	// 		: 0;
-	// }
 	for (int i = 0; i < moves.num_moves; i++) {
 		move_t move = moves.moves[i];
 		play_move(b, move);
@@ -240,8 +234,19 @@ best_move_t negamax(chessboard_t* b, int alpha, int beta, unsigned depth) {
 	return bm;
 }
 
-best_move_t find_best_move(chessboard_t* b) {
-	return negamax(b, -INT_MAX, INT_MAX, 3);
+// best_move_t iterative_deepener(chessboard_t* b) {
+// }
+
+unsigned maxdepth = 10;
+
+best_move_t best_move(chessboard_t* b) {
+	return negamax(b, -INT_MAX, INT_MAX, 8);
+}
+best_move_t find_best_move(search_parameter_t* p) {
+	pthread_rwlock_rdlock(&p->locks[0]);
+	unsigned depth = p->limit.depth;
+	pthread_rwlock_unlock(&p->locks[0]);
+	return negamax(p->chessboard, -INT_MAX, INT_MAX, depth);
 }
 
 move_t random_player(chessboard_t* b) {

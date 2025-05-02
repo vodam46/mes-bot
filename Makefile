@@ -26,9 +26,9 @@ CFLAGS=-Wall -Wextra -Werror -pedantic -Wunreachable-code \
 #  -> -ftest-coverage	(--coverage)
 #  -> -fbranch-probabilities
 
-CFLAGS += -O3 -g
+CFLAGS +=-O3 -g -lpthread
 
-sources=main.c bitboard.c chess.c test.c magic.c engine.c
+sources=main.c bitboard.c chess.c test.c magic.c engine.c uci.c
 
 .PHONY: clean run build
 

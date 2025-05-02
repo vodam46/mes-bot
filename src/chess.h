@@ -64,7 +64,6 @@ typedef struct chessboard {
 	unsigned fullmove;
 
 	/*
-	 * move counter
 	 * repetition checking
 		 * linked list of previous positions?
 		 * only check if pawn bitboards are the same
@@ -93,6 +92,7 @@ unsigned char string_to_square(char square[2]);
 void square_to_string(unsigned char square, char string[2]);
 
 move_t string_to_move(char s[5]);
+move_t string_to_move_flags(chessboard_t* b, char s[5]);
 void move_to_string(move_t m, char s[5]);
 
 void print_moves(moves_t m);

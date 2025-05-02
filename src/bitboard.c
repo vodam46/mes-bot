@@ -52,32 +52,31 @@ bitboard_t bitboard_fewbits() {
 	return random_bitboard() & random_bitboard() & random_bitboard();
 }
 
+bitboard_t bitboard_betweens[64][64];
+void init_bitboard_between(void) {
+	for (int s = 0; s < 64; s++) {
+		for (int e = 0; e < 64; e++) {
+			int fr = s>>3, ff = s&7;
+			int tr = e>>3, tf = e&7;
+			int ro = (tr>fr) - (tr<fr);
+			int fo = (tf>ff) - (tf<ff);
 
-// TODO: improve this, its kinda ugly
-// pregenerated lines?
-bitboard_t bitboard_between(int start, int end) {
-	int fr = start>>3, ff = start&7;
-	int tr = end>>3, tf = end&7;
-	int ro, fo;
-	if (tr < fr)
-		ro = -1;
-	else if (tr > fr)
-		ro = 1;
-	else
-		ro = 0;
+			int dr = tr - fr;
+			int df = tf - ff;
 
-	if (tf < ff)
-		fo = -1;
-	else if (tf > ff)
-		fo = 1;
-	else
-		fo = 0;
-
-	bitboard_t b = 0x0ull;
-	for (int r = fr+ro, f = ff+fo;
-			r != tr || f != tf;
-			r += ro, f += fo) {
-		b |= 1ull << (r*8+f);
+			bitboard_t b = 0x0ull;
+			if (dr == 0 || df == 0 || abs(dr) == abs(df)) {
+				for (int r = fr+ro, f = ff+fo;
+						r != tr || f != tf;
+						r += ro, f += fo) {
+					b |= 1ull << (r*8+f);
+				}
+			}
+			bitboard_betweens[s][e] = b;
+		}
 	}
-	return b;
+}
+
+bitboard_t bitboard_between(int start, int end) {
+	return bitboard_betweens[start][end];
 }
