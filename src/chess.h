@@ -3,7 +3,7 @@
 #include "bitboard.h"
 
 typedef enum piece {
-	empty = -1,
+	pempty = -1,
 	wpawn,
 	wknight,
 	wbishop,

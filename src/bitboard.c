@@ -30,6 +30,7 @@ int bitboard_contains(bitboard_t b, int i) {
 	return (b>>i)&1;
 }
 
+// TODO: fix this, its currently taking up the most time
 int bitboard_lowest(bitboard_t b) {
 	return b ? bitboard_count((b ^ (b-1))>>1) : 64;
 }

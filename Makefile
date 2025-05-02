@@ -28,7 +28,7 @@ CFLAGS=-Wall -Wextra -Werror -pedantic -Wunreachable-code \
 
 CFLAGS +=-O3 -g -lpthread
 
-sources=main.c bitboard.c chess.c test.c magic.c engine.c uci.c
+sources=main.c bitboard.c chess.c test.c magic.c engine.c uci.c hash.c
 
 .PHONY: clean run build
 

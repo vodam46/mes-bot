@@ -14,6 +14,7 @@ typedef enum command_type {
 	cmd_isready,
 } command_type_t;
 
+// TODO: proper infinite
 typedef struct limit {
 	unsigned time[2];
 	unsigned inc[2];

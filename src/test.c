@@ -7,6 +7,7 @@
 #include "chess.h"
 #include "test.h"
 #include "engine.h"
+#include "hash.h"
 #include "magic.h"
 
 #define assert(b) do {tests_run++; if (!(b)) { \
@@ -617,6 +618,12 @@ void test_engine(void) {
 
 
 void test_all(void) {
+	init_bitboard_between();
+	init_attack_bitboard();
+	generate_magics();
+	init_piece_square_tables();
+	init_hash_table();
+
 	test_bitboard();
 	test_chess();
 	test_magic();
@@ -628,4 +635,5 @@ void test_all(void) {
 	printf("passed %d out of %d tests\n", tests_run-tests_failed, tests_run);
 	printf("\033[0m");
 
+	destroy_hash_table();
 }

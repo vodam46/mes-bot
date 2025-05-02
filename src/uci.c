@@ -7,6 +7,8 @@
 
 #include "chess.h"
 #include "engine.h"
+#include "hash.h"
+#include "magic.h"
 #include "uci.h"
 
 
@@ -17,11 +19,9 @@ uci_command_t parse_command(char* command) {
 	if (!strncmp(command, "go", 2)) {
 		if (!strncmp(command, "go perft", 8)) {
 			cmd.type = cmd_perft;
-			printf("%s\n", command+9);
 			cmd.args.depth = atoi(command+9);
 		} else {
 			cmd.type = cmd_search;
-			printf("%s\n", command+3);
 			cmd.args.limit = (limit_t){
 				.time = {UINT_MAX, UINT_MAX},
 				.inc = {UINT_MAX, UINT_MAX},
@@ -49,7 +49,6 @@ uci_command_t parse_command(char* command) {
 		if (!strncmp(command, "position startpos", 17)) {
 			cmd.args.board = init_chessboard(startfen);
 		} else if (!strncmp(command, "position fen", 12)){
-			printf("%s\n", command+12);
 			cmd.args.board = init_chessboard(command + 12);
 		}
 
@@ -83,7 +82,12 @@ pthread_t input_thread;
 search_parameter_t* search = NULL;
 
 void* search_loop(void* a) {
-	// printf("search\n");
+	init_bitboard_between();
+	init_attack_bitboard();
+	generate_magics();
+	init_piece_square_tables();
+	init_hash_table();
+
 	unsigned loop = 1;
 	while (loop) {
 		sleep(1);
@@ -113,13 +117,12 @@ void* search_loop(void* a) {
 		printf("bestmove %s\n", string);
 
 	}
-	printf("search thread stopped: %p\n", a);
-	return NULL;
+	printf("search thread stopped\n");
+	return a;
 }
 
 void input_loop(void) {
-	// printf("uci\n");
-
+	printf("Moravský Elektrický Šachista (meš), written by Ada (@vodam)\n");
 	while (1) {
 		char* command = NULL;
 		size_t size = 0;
@@ -136,11 +139,19 @@ void input_loop(void) {
 		free(command);
 
 		if (cmd.type == cmd_uci) {
+			printf("id name meš\n");
+			printf("id author Ada (@vodam)\n");
 			printf("uciok\n");
 		}
 
 		if (cmd.type == cmd_isready) {
 			printf("readyok\n");
+		}
+
+		if (cmd.type == cmd_stop || cmd.type == cmd_quit) {
+			pthread_rwlock_wrlock(&search->locks[3]);
+			search->stop = 1;
+			pthread_rwlock_unlock(&search->locks[3]);
 		}
 
 		if (cmd.type == cmd_quit) {
@@ -149,13 +160,6 @@ void input_loop(void) {
 			search->keep_running = 0;
 			pthread_rwlock_unlock(&search->locks[2]);
 			return;
-		}
-
-		if (cmd.type == cmd_stop || cmd.type == cmd_quit) {
-			printf("stopping\n");
-			pthread_rwlock_wrlock(&search->locks[3]);
-			search->stop = 1;
-			pthread_rwlock_unlock(&search->locks[3]);
 		}
 
 		if (cmd.type == cmd_position) {
@@ -170,9 +174,12 @@ void input_loop(void) {
 
 		if (cmd.type == cmd_perft) {
 			pthread_rwlock_wrlock(&search->locks[1]);
+			if (search->chessboard == NULL) {
+				search->chessboard = init_chessboard(startfen);
+			}
 			unsigned long long total = 0;
 			printf("total nodes: %llu\n", perft(search->chessboard, cmd.args.depth, 1, &total));
-			printf("total visited: %llu", total);
+			printf("total visited: %llu\n", total);
 			pthread_rwlock_unlock(&search->locks[1]);
 		}
 
@@ -217,4 +224,5 @@ void uci_loop(void) {
 		pthread_rwlock_destroy(&search->locks[i]);
 	}
 	free(search);
+	destroy_hash_table();
 }

@@ -1,9 +1,11 @@
 #include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 #include "engine.h"
 #include "chess.h"
 #include "uci.h"
+#include "hash.h"
 
 int mg_value[6] = { 82, 337, 365, 477, 1025,  0};
 int eg_value[6] = { 94, 281, 297, 512,  936,  0};
@@ -210,16 +212,53 @@ int evaluate(chessboard_t* b) {
 	return (mgScore*phase + egScore*(24-phase))/24;
 }
 
-best_move_t negamax(chessboard_t* b, int alpha, int beta, unsigned depth) {
-	if (depth == 0 || (game_result(b) != ongoing))
-		return (best_move_t){.move=0, .score=evaluate(b)};
+best_move_t negamax(chessboard_t* b, int alpha, int beta, unsigned depth,
+		search_parameter_t* p) {
+
+	if (p) {
+		pthread_rwlock_rdlock(&p->locks[3]);
+		unsigned stop = p->stop;
+		pthread_rwlock_unlock(&p->locks[3]);
+		if (stop) return (best_move_t){0, 0};
+	}
+
+	int alphaorig = alpha;
+
+	uint64_t key = hash_key(b);
+	hash_element_t* entry = hash_index(key);
 	best_move_t bm = {.move=0, .score=INT_MIN};
+
+	if (entry->type != node_empty && entry->depth >= depth) {
+		if (entry->type == node_exact) {
+			return entry->best_move;
+		}
+		if (entry->type == node_lower && entry->best_move.score >= beta) {
+			return entry->best_move;
+		}
+		if (entry->type == node_upper && entry->best_move.score <= alpha) {
+			return entry->best_move;
+		}
+		bm = entry->best_move;
+	}
+	if (depth == 0 || (game_result(b) != ongoing))
+		// TODO: quiescence search
+		return (best_move_t){.move=0, .score=evaluate(b)};
+
+	entry->type = node_searching;
+
 	moves_t moves = generate_moves(b);
 	for (int i = 0; i < moves.num_moves; i++) {
 		move_t move = moves.moves[i];
 		play_move(b, move);
-		int score = -negamax(b, -beta, -alpha, depth-1).score;
+		int score = -negamax(b, -beta, -alpha, depth-1, p).score;
 		undo_move(b);
+
+		if (p) {
+			pthread_rwlock_rdlock(&p->locks[3]);
+			unsigned stop = p->stop;
+			pthread_rwlock_unlock(&p->locks[3]);
+			if (stop) return (best_move_t){0, 0};
+		}
 
 		if (score >= bm.score) {
 			bm.score = score;
@@ -230,23 +269,50 @@ best_move_t negamax(chessboard_t* b, int alpha, int beta, unsigned depth) {
 			break;
 
 	}
+
+	node_type_t type = node_exact;
+	if (bm.score <= alphaorig) {
+		type = node_upper;
+	} else if (bm.score >= beta) {
+		type = node_lower;
+	}
+	entry = hash_index(key);
+	entry->type = type;
+	entry->best_move = bm;
+	entry->depth = depth;
+
 	free(moves.moves);
 	return bm;
 }
 
-// best_move_t iterative_deepener(chessboard_t* b) {
-// }
-
 unsigned maxdepth = 10;
 
 best_move_t best_move(chessboard_t* b) {
-	return negamax(b, -INT_MAX, INT_MAX, 8);
+	return negamax(b, -INT_MAX, INT_MAX, 8, NULL);
 }
+
 best_move_t find_best_move(search_parameter_t* p) {
 	pthread_rwlock_rdlock(&p->locks[0]);
 	unsigned depth = p->limit.depth;
 	pthread_rwlock_unlock(&p->locks[0]);
-	return negamax(p->chessboard, -INT_MAX, INT_MAX, depth);
+
+	best_move_t best_move = {0};
+	for (unsigned cur_depth = 0; cur_depth <= depth; cur_depth++) {
+		best_move_t bm = negamax(p->chessboard, -INT_MAX, INT_MAX, cur_depth, p);
+
+		pthread_rwlock_rdlock(&p->locks[3]);
+		unsigned stop = p->stop;
+		pthread_rwlock_unlock(&p->locks[3]);
+		if (stop) break;
+
+
+		char string[6];
+		move_to_string(bm.move, string);
+		printf("info depth %u score cp %d pv %s\n", cur_depth, bm.score, string);
+
+		best_move = bm;
+	}
+	return best_move;
 }
 
 move_t random_player(chessboard_t* b) {

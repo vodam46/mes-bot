@@ -123,7 +123,7 @@ void print_chessboard(chessboard_t* b) {
 	for (int rank = 7; rank >= 0; rank--) {
 		for (int file = 0; file < 8; file++) {
 			piece_t p = piece_at(b, (rank<<3) + file);
-			printf("%c", p == empty ? '.' : piece_chars[p]);
+			printf("%c", p == pempty ? '.' : piece_chars[p]);
 		}
 		printf("\n");
 	}
@@ -218,11 +218,11 @@ piece_t piece_at(chessboard_t* b, unsigned pos) {
 		}
 	}
 
-	return empty;
+	return pempty;
 }
 
 int piece_side(piece_t p) {
-	if (p == empty) return -1;
+	if (p == pempty) return -1;
 	return p >= 6;
 }
 
@@ -257,7 +257,7 @@ move_t string_to_move_flags(chessboard_t* b, char s[5]) {
 	unsigned to = move>>3;
 	piece_t pick_up = piece_at(b, from);
 	piece_t capture = piece_at(b, to);
-	if (capture != empty) {
+	if (capture != pempty) {
 		move |= 0x4<<12;
 	}
 	if (move>>12) {
@@ -269,7 +269,7 @@ move_t string_to_move_flags(chessboard_t* b, char s[5]) {
 		? -1
 		: b->en_passant_square + (b->side ? 8 : -8);
 	if (pick_up == wpawn + 6*b->side) {
-		if (enpassant != -1 && capture == empty && to == (unsigned)enpassant)
+		if (enpassant != -1 && capture == pempty && to == (unsigned)enpassant)
 			move |= 0x5<<12;
 		if (diff == 16)
 			move |= 0x1<<12;
@@ -327,7 +327,7 @@ int play_move(chessboard_t* b, move_t m) {
 	unsigned to   = (m>>6)&0x3f;
 	if (piece_side(piece_at(b, to)) == b->side) return 0;
 	unsigned flags = (m>>12)&0xf;
-	piece_t capture = empty;
+	piece_t capture = pempty;
 	int oldfifty = b->fiftymove;
 
 	if (flags&0x8) {
@@ -499,11 +499,11 @@ bitboard_t potential_moves(chessboard_t* b, bitboard_t blockers,
 	switch (piece_type) {
 		case wpawn:
 			if (is_attack) return pawn_attacks[position];
-			return pawn_moves[position][piece_at(b, position+8) != empty];
+			return pawn_moves[position][piece_at(b, position+8) != pempty];
 		case bpawn:
 			if (is_attack) return flip_horizontal(pawn_attacks[position^56]);
 			return flip_horizontal(
-					pawn_moves[position^56][piece_at(b, position-8) != empty]
+					pawn_moves[position^56][piece_at(b, position-8) != pempty]
 					);
 
 		case wknight: case bknight:
