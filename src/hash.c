@@ -5,7 +5,7 @@
 #include "hash.h"
 #include "chess.h"
 
-unsigned hash_table_size = 64;
+unsigned hash_table_size = 8;
 hash_table_t table = {0};
 
 void init_hash_table(void) {
@@ -23,6 +23,7 @@ void init_hash_table(void) {
 
 void destroy_hash_table(void) {
 	free(table.elements);
+	table = (hash_table_t){0};
 }
 
 uint64_t hash_key(chessboard_t* b) {
@@ -64,6 +65,7 @@ void hash_realloc(void) {
 
 	for (unsigned i = 0; i < table.size; i++) {
 		hash_element_t e = table.elements[i];
+		if (e.type == node_empty) continue;
 		int index = e.key % new_size;
 		while (new_arr[index].type != node_empty) {
 			if (new_arr[index].key == e.key) break;

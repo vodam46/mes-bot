@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <limits.h>
 
+#include "globals.h"
 #include "chess.h"
 #include "engine.h"
 #include "hash.h"
@@ -57,7 +58,14 @@ uci_command_t parse_command(char* command) {
 			char* move = strtok(moves_start+6, " ");
 			while (move != NULL) {
 				move_t m = string_to_move_flags(cmd.args.board, move);
-				play_move(cmd.args.board, m);
+				if (!play_move(cmd.args.board, m)) {
+					printf("%s = %c %c -> %c %c (%x)\n",
+							move,
+							(m&0x7)+'a', ((m>>3)&0x7)+'1',
+							((m>>6)&0x7)+'a', ((m>>9)&0x7)+'1', m>>12);
+					print_chessboard(cmd.args.board);
+					fflush(stdout);
+				}
 				move = strtok(NULL, " ");
 			}
 		}
@@ -77,9 +85,46 @@ uci_command_t parse_command(char* command) {
 
 
 pthread_t search_thread;
+pthread_t time_thread;
 pthread_t input_thread;
 
+time_management_t time_management;
+pthread_rwlock_t timelock;
 search_parameter_t* search = NULL;
+
+void* time_loop(void* a) {
+	unsigned loop = 1;
+	while (loop) {
+		pthread_rwlock_rdlock(&search->locks[3]);
+		loop = search->keep_running;
+		pthread_rwlock_unlock(&search->locks[3]);
+
+		pthread_rwlock_rdlock(&timelock);
+		time_management_t time = time_management;
+		pthread_rwlock_unlock(&timelock);
+		if (time.finished) continue;
+
+		pthread_rwlock_wrlock(&search->locks[3]);
+		search->stop = 0;
+		pthread_rwlock_unlock(&search->locks[3]);
+
+		while (!time.finished && timeInMilliseconds() - time.start_time < time.total_time/20) {
+			usleep(100);
+			pthread_rwlock_rdlock(&timelock);
+			time = time_management;
+			pthread_rwlock_unlock(&timelock);
+		}
+
+		pthread_rwlock_wrlock(&search->locks[3]);
+		search->stop = 1;
+		pthread_rwlock_unlock(&search->locks[3]);
+
+		pthread_rwlock_wrlock(&timelock);
+		time_management.finished = 1;
+		pthread_rwlock_unlock(&timelock);
+	}
+	return a;
+}
 
 void* search_loop(void* a) {
 	init_bitboard_between();
@@ -90,8 +135,6 @@ void* search_loop(void* a) {
 
 	unsigned loop = 1;
 	while (loop) {
-		sleep(1);
-
 		pthread_rwlock_rdlock(&search->locks[3]);
 		loop = search->keep_running;
 		pthread_rwlock_unlock(&search->locks[3]);
@@ -105,6 +148,7 @@ void* search_loop(void* a) {
 		if (search->chessboard == NULL) {
 			search->chessboard = init_chessboard(startfen);
 		}
+
 		best_move_t bm = find_best_move(search);
 		pthread_rwlock_unlock(&search->locks[1]);
 
@@ -115,9 +159,10 @@ void* search_loop(void* a) {
 		char string[6] = {0};
 		move_to_string(bm.move, string);
 		printf("bestmove %s\n", string);
-
+		fflush(stdout);
 	}
 	printf("search thread stopped\n");
+	destroy_hash_table();
 	return a;
 }
 
@@ -152,6 +197,10 @@ void input_loop(void) {
 			pthread_rwlock_wrlock(&search->locks[3]);
 			search->stop = 1;
 			pthread_rwlock_unlock(&search->locks[3]);
+
+			pthread_rwlock_wrlock(&timelock);
+			time_management.finished = 1;
+			pthread_rwlock_unlock(&timelock);
 		}
 
 		if (cmd.type == cmd_quit) {
@@ -184,14 +233,24 @@ void input_loop(void) {
 		}
 
 		if (cmd.type == cmd_search) {
+			pthread_rwlock_wrlock(&search->locks[1]);
+			if (search->chessboard == NULL)
+				search->chessboard = init_chessboard(startfen);
+			unsigned side = search->chessboard->side;
+			pthread_rwlock_unlock(&search->locks[1]);
+
+			pthread_rwlock_wrlock(&timelock);
+			time_management.finished = 0;
+			time_management.start_time = timeInMilliseconds();
+			time_management.total_time = cmd.args.limit.time[side];
+			time_management.increment = cmd.args.limit.inc[side];
+			pthread_rwlock_unlock(&timelock);
+
 			pthread_rwlock_wrlock(&search->locks[0]);
 			search->limit = cmd.args.limit;
 			pthread_rwlock_unlock(&search->locks[0]);
-
-			pthread_rwlock_wrlock(&search->locks[3]);
-			search->stop = 0;
-			pthread_rwlock_unlock(&search->locks[3]);
 		}
+		fflush(stdout);
 
 		sleep(1);		// give some time between commands for the search thread to go
 						// (maybe not the best idea, uci is meant to be responsive)
@@ -204,25 +263,33 @@ void uci_loop(void) {
 	search = calloc(1, sizeof(search_parameter_t));
 	search->stop = 1;
 	search->keep_running = 1;
+	time_management.finished = 1;
 	for (int i = 0; i < 4; i++) {
 		if (pthread_rwlock_init(&search->locks[i], NULL)) {
 			printf("Thread lock init failure\n");
 			exit(1);
 		}
 	}
+	if (pthread_rwlock_init(&timelock, NULL)) {
+		printf("Thread lock init failure\n");
+		exit(1);
+	}
 
 	int error;
 
 	error = pthread_create(&search_thread, NULL, &search_loop, NULL);
 	if (error) printf("%s\n", strerror(error));
+	error = pthread_create(&time_thread, NULL, &time_loop, NULL);
+	if (error) printf("%s\n", strerror(error));
 
 	input_loop();
 
+	pthread_join(time_thread, NULL);
 	pthread_join(search_thread, NULL);
 
 	for (int i = 0; i < 4; i++) {
 		pthread_rwlock_destroy(&search->locks[i]);
 	}
+	pthread_rwlock_destroy(&timelock);
 	free(search);
-	destroy_hash_table();
 }

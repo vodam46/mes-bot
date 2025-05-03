@@ -1,6 +1,7 @@
 /*
 * TODO:
 * asserts (ifdef debug)
+* debug info
 * remove some of the return 0; from play_move and undo_move?
 * some more optimizations?
 *	- rewrite some of the code so its branchless?

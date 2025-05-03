@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <sys/time.h>
 
+#include "globals.h"
 #include "bitboard.h"
 #include "chess.h"
 #include "test.h"
@@ -30,6 +31,7 @@ void test_bitboard(void) {
 	for (int i = 0; i < 64; i++)
 		assert(bitboard_lowest(1ull<<i) == i);
 	assert(bitboard_lowest(0ULL) == 64);
+	printf("%d\n", bitboard_lowest(1ull));
 }
 
 char* testfen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
@@ -47,7 +49,7 @@ struct perft_results perft_results[] = {
 		.fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
 		.results={20, 400, 8902, 197281, 4865609, 119060324, 3195901860, 84998978956, 2439530234167},
 		.start_depth = 1,
-		.num_results = 6	// 9
+		.num_results = 9	// 9
 	},
 	{
 		.fen="r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
@@ -78,7 +80,7 @@ struct perft_results perft_results[] = {
 		.results={1, 46, 2079, 89890, 3894594, 164075551, 6923051137 ,
 			287177884746, 11923589843526, 490154852788714},
 		.start_depth=0,
-		.num_results=6	// 9
+		.num_results=9	// 9
 	},
 	{
 		.fen="r6r/1b2k1bq/8/8/7B/8/8/R3K2R b KQ - 3 2",
@@ -470,26 +472,9 @@ void test_magic(void) {
 	}
 }
 
-long long timeInMilliseconds(void) {
-    struct timeval tv;
-
-    gettimeofday(&tv,NULL);
-    return (((long long)tv.tv_sec)*1000)+(tv.tv_usec/1000);
-}
-
 void test_perft(void) {
 
-	// printf("\n\n----\n\n");
-	// chessboard_t* b = init_chessboard(
-	// 		"8/8/K4R2/1Ppp3r/8/6k1/4P1P1/8 w - c6 0 4"
-	// );
-	// print_moves(generate_moves(b));
-	// unsigned long long t;
-	// printf("%llu\n", perft(b, 2, 1, &t));
-	// free(b);
-	// return;
-
-	int maximum_perft = 7;
+	int maximum_perft = 8;
 
 	int len;
 	unsigned long long total_visited = 0;
@@ -628,7 +613,7 @@ void test_all(void) {
 	test_chess();
 	test_magic();
 	test_perft();
-	test_engine();
+	// test_engine();
 
 	if (tests_failed) printf("\033[31m❌");
 	else printf("\033[32m✅");

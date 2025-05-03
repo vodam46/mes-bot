@@ -293,11 +293,20 @@ best_move_t best_move(chessboard_t* b) {
 
 best_move_t find_best_move(search_parameter_t* p) {
 	pthread_rwlock_rdlock(&p->locks[0]);
-	unsigned depth = p->limit.depth;
+	limit_t limit = p->limit;
 	pthread_rwlock_unlock(&p->locks[0]);
 
-	best_move_t best_move = {0};
-	for (unsigned cur_depth = 0; cur_depth <= depth; cur_depth++) {
+	best_move_t best_move = negamax(p->chessboard, -INT_MAX, INT_MAX, 1, NULL);
+	if (best_move.move == 0) {
+		printf("null move!!!\n");
+	}
+	char string[6] = {0};
+	move_to_string(best_move.move, string);
+	printf("info depth %u score cp %d pv %s\n", 1, best_move.score, string);
+	fflush(stdout);
+
+	unsigned cur_depth = 1;
+	for (cur_depth = 2; cur_depth <= limit.depth; cur_depth++) {
 		best_move_t bm = negamax(p->chessboard, -INT_MAX, INT_MAX, cur_depth, p);
 
 		pthread_rwlock_rdlock(&p->locks[3]);
@@ -305,13 +314,17 @@ best_move_t find_best_move(search_parameter_t* p) {
 		pthread_rwlock_unlock(&p->locks[3]);
 		if (stop) break;
 
-
-		char string[6];
+		char string[6] = {0};
 		move_to_string(bm.move, string);
 		printf("info depth %u score cp %d pv %s\n", cur_depth, bm.score, string);
+		fflush(stdout);
 
 		best_move = bm;
 	}
+	string[4] = 0;
+	move_to_string(best_move.move, string);
+	printf("info depth %u score cp %d pv %s\n", cur_depth-1, best_move.score, string);
+	fflush(stdout);
 	return best_move;
 }
 

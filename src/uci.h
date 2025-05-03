@@ -32,6 +32,13 @@ typedef struct uci_command {
 	} args;
 } uci_command_t;
 
+typedef struct time_management {
+	unsigned long long start_time;
+	unsigned total_time;
+	unsigned increment;
+	unsigned finished;
+} time_management_t;
+
 typedef struct search_parameter {
 	limit_t limit;
 	chessboard_t* chessboard;

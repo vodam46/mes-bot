@@ -116,8 +116,6 @@ void init_attack_bitboard(void) {
 }
 #undef in_bounds
 
-// TODO: implement everything thats needed
-
 void print_chessboard(chessboard_t* b) {
 	printf("%s:\n", b->side ? "black" : "white");
 	for (int rank = 7; rank >= 0; rank--) {
@@ -223,7 +221,7 @@ piece_t piece_at(chessboard_t* b, unsigned pos) {
 
 int piece_side(piece_t p) {
 	if (p == pempty) return -1;
-	return p >= 6;
+	return p >= bpawn;
 }
 
 void square_to_string(unsigned char square, char string[2]) {
@@ -241,11 +239,10 @@ move_t string_to_move(char s[5]) {
 	unsigned char flags = 0;
 	char p = s[4];
 	if (p != 0) {
-		flags |= 0x8;
-		if (p == 'n') flags |= 0x0;
-		if (p == 'b') flags |= 0x1;
-		if (p == 'r') flags |= 0x2;
-		if (p == 'q') flags |= 0x3;
+		if (p == 'n') flags |= 0x8;
+		if (p == 'b') flags |= 0x9;
+		if (p == 'r') flags |= 0xa;
+		if (p == 'q') flags |= 0xb;
 	}
 	return flags | (to<<6) | from;
 }
@@ -253,8 +250,8 @@ move_t string_to_move(char s[5]) {
 move_t string_to_move_flags(chessboard_t* b, char s[5]) {
 	// TODO: test this
 	move_t move = string_to_move(s);
-	unsigned from = move&0x7;
-	unsigned to = move>>3;
+	unsigned from = move&0x3f;
+	unsigned to = (move>>6)&0x3f;
 	piece_t pick_up = piece_at(b, from);
 	piece_t capture = piece_at(b, to);
 	if (capture != pempty) {
@@ -264,7 +261,7 @@ move_t string_to_move_flags(chessboard_t* b, char s[5]) {
 		return move;
 	}
 
-	int diff = abs((int)from - (int)to);
+	unsigned diff = from > to ? from - to : to - from;
 	int enpassant = b->en_passant_square == -1
 		? -1
 		: b->en_passant_square + (b->side ? 8 : -8);
@@ -274,9 +271,9 @@ move_t string_to_move_flags(chessboard_t* b, char s[5]) {
 		if (diff == 16)
 			move |= 0x1<<12;
 	}
-	if (pick_up == wking + 6*b->side && diff == 2) {
+	if ((pick_up == wking + 6*b->side) && diff == 2) {
 		move |= 0x2<<12;
-		move |= ((to&0x7) == 1)<<12;
+		move |= ((to&0x7) == 2)<<12;
 	}
 
 	return move;
@@ -551,9 +548,8 @@ moves_t generate_moves(chessboard_t* b) {
 
 	int king = bitboard_lowest(b->pieces[wking + 6*b->side]);
 	// TODO: fix this - shouldnt ever happen
-	// enpassant pins, probably
 	if (king == 64) {
-		printf(".");
+		print_chessboard(b);
 		return moves;
 	}
 	bitboard_t options = king_attacks[king] & ~(attacked_squares | our);

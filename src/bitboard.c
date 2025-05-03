@@ -30,19 +30,24 @@ int bitboard_contains(bitboard_t b, int i) {
 	return (b>>i)&1;
 }
 
-// TODO: fix this, its currently taking up the most time
 int bitboard_lowest(bitboard_t b) {
-	return b ? bitboard_count((b ^ (b-1))>>1) : 64;
+#ifdef __GNUC__
+	return __builtin_ctzll(b);
+#endif
+	bitboard_t upper = b & (b-1);
+	return bitboard_count((b ^ upper) - 1);
 }
 
 int bitboard_count(bitboard_t b) {
+#ifdef __GNUC__
+	return __builtin_popcountll(b);
+#endif
 	int c;
-	for (c = 0; b; c++)
-		b &= b-1;
+	for (c = 0; b; c++, b &= b-1);
 	return c;
 }
 
-bitboard_t random_bitboard() {
+bitboard_t random_bitboard(void) {
 	bitboard_t u1, u2, u3, u4;
 	u1 = (bitboard_t)(random()) & 0xFFFF; u2 = (bitboard_t)(random()) & 0xFFFF;
 	u3 = (bitboard_t)(random()) & 0xFFFF; u4 = (bitboard_t)(random()) & 0xFFFF;
