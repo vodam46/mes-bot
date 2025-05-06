@@ -61,7 +61,7 @@ typedef struct chessboard {
 	unsigned char castling_rights;
 
 	unsigned fiftymove;
-	unsigned fullmove;
+	unsigned ply;
 
 	/*
 	 * repetition checking

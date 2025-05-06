@@ -15,7 +15,7 @@ extern magic_t bishop_magics[64];
 extern bitboard_t bishop_magic_attacks[64][4096];
 extern bitboard_t bishop_magic_blockers[64][4096];
 
-void generate_magics();
+void generate_magics(void);
 int magic_index(bitboard_t b, magic_t magic);
 bitboard_t get_rook_attacks(int square, bitboard_t blockers);
 bitboard_t get_bishop_attacks(int square, bitboard_t blockers);

@@ -1,3 +1,4 @@
+// TODO: stop using rwlock for everything
 #include <stdio.h>
 #include <pthread.h>
 #include <stdlib.h>
@@ -75,7 +76,11 @@ uci_command_t parse_command(char* command) {
 	} else if (!strncmp(command, "quit", 4)) {
 		cmd.type = cmd_quit;
 	} else if (!strncmp(command, "uci", 3)) {
-		cmd.type = cmd_uci;
+		if (!strncmp(command, "ucinewgame", 10)) {
+			cmd.type = cmd_newgame;
+		} else {
+			cmd.type = cmd_uci;
+		}
 	} else if (!strncmp(command, "isready", 7)) {
 		cmd.type = cmd_isready;
 	}
@@ -93,23 +98,19 @@ pthread_rwlock_t timelock;
 search_parameter_t* search = NULL;
 
 void* time_loop(void* a) {
-	unsigned loop = 1;
-	while (loop) {
+	while (1) {
 		pthread_rwlock_rdlock(&search->locks[3]);
-		loop = search->keep_running;
+		unsigned loop = search->keep_running;
 		pthread_rwlock_unlock(&search->locks[3]);
+		if (!loop) return a;
 
 		pthread_rwlock_rdlock(&timelock);
 		time_management_t time = time_management;
 		pthread_rwlock_unlock(&timelock);
 		if (time.finished) continue;
 
-		pthread_rwlock_wrlock(&search->locks[3]);
-		search->stop = 0;
-		pthread_rwlock_unlock(&search->locks[3]);
-
 		while (!time.finished && timeInMilliseconds() - time.start_time < time.total_time/20) {
-			usleep(100);
+			usleep(10);
 			pthread_rwlock_rdlock(&timelock);
 			time = time_management;
 			pthread_rwlock_unlock(&timelock);
@@ -123,7 +124,6 @@ void* time_loop(void* a) {
 		time_management.finished = 1;
 		pthread_rwlock_unlock(&timelock);
 	}
-	return a;
 }
 
 void* search_loop(void* a) {
@@ -133,11 +133,11 @@ void* search_loop(void* a) {
 	init_piece_square_tables();
 	init_hash_table();
 
-	unsigned loop = 1;
-	while (loop) {
+	while (1) {
 		pthread_rwlock_rdlock(&search->locks[3]);
-		loop = search->keep_running;
+		unsigned loop = search->keep_running;
 		pthread_rwlock_unlock(&search->locks[3]);
+		if (!loop) break;
 
 		pthread_rwlock_rdlock(&search->locks[3]);
 		unsigned stop = search->stop;
@@ -145,10 +145,6 @@ void* search_loop(void* a) {
 		if (stop) continue;
 
 		pthread_rwlock_wrlock(&search->locks[1]);
-		if (search->chessboard == NULL) {
-			search->chessboard = init_chessboard(startfen);
-		}
-
 		best_move_t bm = find_best_move(search);
 		pthread_rwlock_unlock(&search->locks[1]);
 
@@ -233,11 +229,16 @@ void input_loop(void) {
 		}
 
 		if (cmd.type == cmd_search) {
+			printf("declare %llu\n", timeInMilliseconds());
 			pthread_rwlock_wrlock(&search->locks[1]);
 			if (search->chessboard == NULL)
 				search->chessboard = init_chessboard(startfen);
 			unsigned side = search->chessboard->side;
 			pthread_rwlock_unlock(&search->locks[1]);
+
+			pthread_rwlock_wrlock(&search->locks[3]);
+			search->stop = 0;
+			pthread_rwlock_unlock(&search->locks[3]);
 
 			pthread_rwlock_wrlock(&timelock);
 			time_management.finished = 0;
@@ -250,9 +251,16 @@ void input_loop(void) {
 			search->limit = cmd.args.limit;
 			pthread_rwlock_unlock(&search->locks[0]);
 		}
+
+		if (cmd.type == cmd_newgame) {
+			printf("clearing the hash table\n");
+			destroy_hash_table();
+			init_hash_table();
+		}
+
 		fflush(stdout);
 
-		sleep(1);		// give some time between commands for the search thread to go
+		// sleep(1);		// give some time between commands for the search thread to go
 						// (maybe not the best idea, uci is meant to be responsive)
 						// also its probably not needed, the thread should wait
 						// until input
@@ -263,6 +271,7 @@ void uci_loop(void) {
 	search = calloc(1, sizeof(search_parameter_t));
 	search->stop = 1;
 	search->keep_running = 1;
+	search->multithreaded = 1;
 	time_management.finished = 1;
 	for (int i = 0; i < 4; i++) {
 		if (pthread_rwlock_init(&search->locks[i], NULL)) {

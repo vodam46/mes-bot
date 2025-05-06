@@ -1,4 +1,4 @@
-CC=gcc
+CC=clang
 NAME=mes
 OUT=bin/$(NAME)
 CFLAGS=-Wall -Wextra -Werror -pedantic -Wunreachable-code \
@@ -26,7 +26,7 @@ CFLAGS=-Wall -Wextra -Werror -pedantic -Wunreachable-code \
 #  -> -ftest-coverage	(--coverage)
 #  -> -fbranch-probabilities
 
-CFLAGS +=-O3 -g -lpthread
+CFLAGS +=-O3 -flto -g -pthread
 
 sources=main.c bitboard.c chess.c test.c magic.c engine.c uci.c hash.c globals.c
 

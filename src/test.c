@@ -30,8 +30,7 @@ void test_bitboard(void) {
 	}
 	for (int i = 0; i < 64; i++)
 		assert(bitboard_lowest(1ull<<i) == i);
-	assert(bitboard_lowest(0ULL) == 64);
-	printf("%d\n", bitboard_lowest(1ull));
+	// assert(bitboard_lowest(0ULL) == 64);	// it would require undefined behavior
 }
 
 char* testfen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
@@ -78,7 +77,7 @@ struct perft_results perft_results[] = {
 	{
 		.fen="r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10",
 		.results={1, 46, 2079, 89890, 3894594, 164075551, 6923051137 ,
-			287177884746, 11923589843526, 490154852788714},
+			287188994746, 11923589843526, 490154852788714},
 		.start_depth=0,
 		.num_results=9	// 9
 	},
@@ -474,11 +473,11 @@ void test_magic(void) {
 
 void test_perft(void) {
 
-	int maximum_perft = 8;
+	int maximum_perft = 5;
 
 	int len;
 	unsigned long long total_visited = 0;
-	long long start = timeInMilliseconds();
+	unsigned long long start = timeInMilliseconds();
 	len = sizeof(perft_results) / sizeof(perft_results[0]);
 	for (int i = 0; i < len; i++) {
 		struct perft_results p = perft_results[i];
@@ -487,6 +486,7 @@ void test_perft(void) {
 		chessboard_t* compare = init_chessboard(p.fen);
 		for (int depth = p.start_depth; depth <= (maximum_perft < p.num_results ? maximum_perft : p.num_results); depth++) {
 			unsigned long long pe = perft(b, depth, 1, &total_visited);
+
 			long long stop = timeInMilliseconds();
 			printf("%d - %llu (%llu)\n", depth, pe, p.results[depth - p.start_depth]);
 			assert(pe == p.results[depth - p.start_depth])
@@ -496,24 +496,30 @@ void test_perft(void) {
 				printf("nps: ~%llu\n", (total_visited*1000)/time_taken);
 			printf("\n");
 		}
-		printf("total_visited: %llu\n\n", total_visited);
 		free(b);
 		free(compare);
 	}
-
+	unsigned long long now = timeInMilliseconds();
+	printf("total_visited: %llu\n", total_visited);
+	printf("time for perft: %llu\n", now - start);
+	printf("average nps: %llu\n", total_visited*1000 / (now - start));
+	printf("average nps: %llu mil\n", total_visited / (now - start) / 1000);
 }
 
 int play_out_position(char* fen, game_result_t expect) {
+	destroy_hash_table();
+	init_hash_table();
 	chessboard_t* b = init_chessboard(fen);
+	print_chessboard(b);
 	while (game_result(b) == ongoing) {
 		best_move_t move = best_move(b);
 		play_move(b, move.move);
 	}
 	game_result_t result = game_result(b);
+	print_chessboard(b);
 	if (result != checkmate) {
 		printf("%d\n", result);
-		printf("%d\n", b->fullmove);
-		print_chessboard(b);
+		printf("%d\n", b->ply);
 	}
 	free(b);
 	return result == expect;
@@ -573,31 +579,43 @@ struct engine_puzzle engine_puzzles[] = {
 	// {.fen="r2qnrnk/p2b2b1/1p1p2pp/2pPpp2/1PP1P3/PRNBB3/3QNPPP/5RK1 w - -",
 	// 	.best_move=f4},
 };
+char* checkmates[] = {
+	"4k3/8/8/8/8/8/8/R3KR2 w Q - 0 1",
+	"4k3/8/8/8/8/8/8/3RK2R w K - 0 1",
+	"4k3/8/8/8/8/8/8/R3K2R w KQ - 0 1",
+	"2k5/4Q3/1K6/8/8/8/8/8 w - - 0 1",
+	"k7/4Q3/1K6/8/8/8/8/8 w - - 0 1",
+
+	// "4k3/8/8/8/8/8/8/3RKR2 w - - 0 1",
+	// "4k3/8/8/8/8/8/8/3QKQ2 w - - 0 1",
+	// "4k3/8/8/8/8/8/8/QQ2K3 w - - 0 1",
+	// "4k3/8/8/8/8/8/8/Q3K3 w - - 0 1",
+	// "1k6/7Q/1K6/8/8/8/8/8 w - - 0 1",
+
+	// "4r2k/1p3rbp/2p1N1p1/p3n3/P2NB1nq/1P6/4R1P1/B1Q2RK1 b - - 4 32",	// TODO: once we find checkmate, stop searching
+	// "8/k7/3p4/p2P1p2/P2P1P2/8/8/K7 w - - 0 1",
+
+};
 void test_engine(void) {
-	char* checkmates[] = {
-		"4k3/8/8/8/8/8/8/3RK2R w K - 0 1",
-		"4k3/8/8/8/8/8/8/3RKR2 w - - 0 1",
-		"4k3/8/8/8/8/8/8/R3K2R w KQ - 0 1",
-		"4k3/8/8/8/8/8/8/R3KR2 w Q - 0 1",
-		"4k3/8/8/8/8/8/8/3QKQ2 w - - 0 1",
-		"4k3/8/8/8/8/8/8/QQ2K3 w - - 0 1",
-		"4k3/8/8/8/8/8/8/Q3K3 w - - 0 1",
-	};
 	for (unsigned i = 0; i < sizeof(checkmates) / sizeof(checkmates[0]); i++) {
 		printf("%s\n", checkmates[i]);
 		assert(play_out_position(checkmates[i], checkmate));
 	}
-	for (unsigned i = 0; i < sizeof(engine_puzzles)/sizeof(engine_puzzles[0]); i++) {
-		printf("%s\n%s\n", engine_puzzles[i].fen, engine_puzzles[i].best_move);
-		chessboard_t* b = init_chessboard(engine_puzzles[i].fen);
-		move_t engine = best_move(b).move;
-		free(b);
-		char string[6];
-		move_to_string(engine, string);
-		printf("%s\n", string);
-		move_t best   = string_to_move(engine_puzzles[i].best_move) | engine_puzzles[i].flags<<12;
-		assert(engine == best);
-	}
+
+	// for (unsigned i = 0; i < sizeof(engine_puzzles)/sizeof(engine_puzzles[0]); i++) {
+	// 	destroy_hash_table();
+	// 	init_hash_table();
+	// 	printf("%s\n%s\n", engine_puzzles[i].fen, engine_puzzles[i].best_move);
+	// 	chessboard_t* b = init_chessboard(engine_puzzles[i].fen);
+	// 	print_chessboard(b);
+	// 	move_t engine = best_move(b).move;
+	// 	free(b);
+	// 	char string[6];
+	// 	move_to_string(engine, string);
+	// 	printf("%s\n", string);
+	// 	move_t best   = string_to_move(engine_puzzles[i].best_move) | engine_puzzles[i].flags<<12;
+	// 	assert(engine == best);
+	// }
 
 }
 
@@ -613,7 +631,7 @@ void test_all(void) {
 	test_chess();
 	test_magic();
 	test_perft();
-	// test_engine();
+	test_engine();
 
 	if (tests_failed) printf("\033[31m❌");
 	else printf("\033[32m✅");

@@ -117,7 +117,7 @@ void init_attack_bitboard(void) {
 #undef in_bounds
 
 void print_chessboard(chessboard_t* b) {
-	printf("%s:\n", b->side ? "black" : "white");
+	printf("%s %u:\n", b->side ? "black" : "white", b->ply);
 	for (int rank = 7; rank >= 0; rank--) {
 		for (int file = 0; file < 8; file++) {
 			piece_t p = piece_at(b, (rank<<3) + file);
@@ -135,7 +135,7 @@ chessboard_t* init_chessboard(char fenstring[]) {
 	if (fenstring == NULL || !strcmp(fenstring, "")) return b;
 	const char len = strlen(fenstring);
 
-	char* fen = malloc(2*len*sizeof(char));
+	char* fen = calloc(len+1, sizeof(char));
 	strncpy(fen, fenstring, len > 100 ? 100 : len);
 
 	// initialize the board
@@ -191,17 +191,17 @@ chessboard_t* init_chessboard(char fenstring[]) {
 
 	// fullmove clock
 	char* fullmove = strtok(NULL, " ");
-	b->fullmove = 0u;
+	b->ply = 0u;
 	for (unsigned long i = 0; i < strlen(fullmove); i++) {
-		b->fullmove *= 10;
-		b->fullmove += fullmove[i] - '0';
+		b->ply *= 10;
+		b->ply += fullmove[i] - '0';
 	}
 
 	free(fen);
 	return b;
 }
 
-bitboard_t pieces_color(chessboard_t* b, int color) {
+inline bitboard_t pieces_color(chessboard_t* b, int color) {
 	bitboard_t r = 0ULL;
 	for (int i = color*6; i < color*6+6; i++) {
 		r |= b->pieces[i];
@@ -209,7 +209,7 @@ bitboard_t pieces_color(chessboard_t* b, int color) {
 	return r;
 }
 
-piece_t piece_at(chessboard_t* b, unsigned pos) {
+inline piece_t piece_at(chessboard_t* b, unsigned pos) {
 	for (int i = 0; i < 12; i++) {
 		if (bitboard_contains(b->pieces[i], pos)) {
 			return i;
@@ -219,9 +219,10 @@ piece_t piece_at(chessboard_t* b, unsigned pos) {
 	return pempty;
 }
 
-int piece_side(piece_t p) {
-	if (p == pempty) return -1;
-	return p >= bpawn;
+inline int piece_side(piece_t p) {
+	return p == pempty ? -1 : (p >= bpawn);
+	// if (p == pempty) return -1;
+	// return p >= bpawn;
 }
 
 void square_to_string(unsigned char square, char string[2]) {
@@ -229,11 +230,11 @@ void square_to_string(unsigned char square, char string[2]) {
 	string[1] = (((square>>3)&7)) + '1';
 }
 
-unsigned char string_to_square(char square[2]) {
+inline unsigned char string_to_square(char square[2]) {
 	return (square[0] - 'a') | ((square[1] - '1')<<3);
 }
 
-move_t string_to_move(char s[5]) {
+inline move_t string_to_move(char s[5]) {
 	unsigned char from = string_to_square(s);
 	unsigned char to   = string_to_square(s+2);
 	unsigned char flags = 0;
@@ -244,11 +245,10 @@ move_t string_to_move(char s[5]) {
 		if (p == 'r') flags |= 0xa;
 		if (p == 'q') flags |= 0xb;
 	}
-	return flags | (to<<6) | from;
+	return (flags<<12) | (to<<6) | from;
 }
 
-move_t string_to_move_flags(chessboard_t* b, char s[5]) {
-	// TODO: test this
+inline move_t string_to_move_flags(chessboard_t* b, char s[5]) {
 	move_t move = string_to_move(s);
 	unsigned from = move&0x3f;
 	unsigned to = (move>>6)&0x3f;
@@ -330,11 +330,10 @@ int play_move(chessboard_t* b, move_t m) {
 	if (flags&0x8) {
 		if (pick_up != wpawn + 6*b->side) return 0;
 		unsigned char promo = flags&0x3;
-		if (promo == 0) put_down = wknight + 6*b->side;
-		if (promo == 1) put_down = wbishop + 6*b->side;
-		if (promo == 2) put_down = wrook   + 6*b->side;
-		if (promo == 3) put_down = wqueen  + 6*b->side;
+		if (promo > 3) return 0;
+		put_down = wknight + 6*b->side + promo;
 	}
+
 	if (flags&0x4) {
 		int capture_square = to;
 		if (!(flags&0x8) && flags&1) {
@@ -351,7 +350,6 @@ int play_move(chessboard_t* b, move_t m) {
 	}
 
 	unsigned char oldcr = b->castling_rights;
-	// int flip = b->side ? 56 : 0;
 	if (flags == 0x3) { // queen castle = 0x3
 						// move rook three spaces right
 		// if (!bitboard_contains(b->pieces[wrook+6*b->side], flip)) return 0;
@@ -396,7 +394,7 @@ int play_move(chessboard_t* b, move_t m) {
 
 	b->pieces[pick_up] &= ~(1ull << from);
 	b->pieces[put_down] |= 1ull << to;
-	b->fullmove += b->side;
+	b->ply++;
 	b->side = !b->side;
 
 	meta_move_t* mm = calloc(1, sizeof(meta_move_t));
@@ -457,7 +455,7 @@ int undo_move(chessboard_t* b) {
 	b->en_passant_square = mm->enpassant;
 	b->pieces[pick_up] &= ~(1ull << from);
 	b->pieces[put_down] |= 1ull << to;
-	b->fullmove -= !b->side;
+	b->ply--;
 	b->side = !b->side;
 
 	b->moves = mm->next;
@@ -473,7 +471,7 @@ int undo_move(chessboard_t* b) {
  * abandon all hope, all ye who enter
  *
  */
-void append_move(moves_t* moves, move_t move) {
+inline void append_move(moves_t* moves, move_t move) {
 	if (moves->num_moves >= moves->arr_len) {
 		moves->arr_len *= 2;
 		moves->moves = realloc(moves->moves, moves->arr_len * sizeof(move_t));
@@ -481,12 +479,10 @@ void append_move(moves_t* moves, move_t move) {
 	moves->moves[moves->num_moves++] = move;
 }
 
-void append_all_options(moves_t* moves, int from, bitboard_t options, unsigned
+inline void append_all_options(moves_t* moves, int from, bitboard_t options, unsigned
 		char flags) {
 	while (options) {
-		int to = bitboard_lowest(options);
-		options &= ~(1ull<<to);
-		append_move(moves, (flags<<12) | (to<<6) | from);
+		append_move(moves, (flags<<12) | (bitboard_poplsb(&options)<<6) | from);
 	}
 }
 
@@ -519,15 +515,14 @@ bitboard_t potential_moves(chessboard_t* b, bitboard_t blockers,
 	}
 }
 
-bitboard_t get_attacked_squares(chessboard_t* b) {
+inline bitboard_t get_attacked_squares(chessboard_t* b) {
 	bitboard_t kingless = (pieces_color(b, b->side) | pieces_color(b, !b->side))
 		& ~b->pieces[wking + 6*b->side];
 
 	bitboard_t attacked_squares = 0ull;
 	bitboard_t enemy = pieces_color(b, !b->side);
 	while (enemy) {
-		int position = bitboard_lowest(enemy);
-		enemy &= ~(1ull<<position);
+		int position = bitboard_poplsb(&enemy);
 		attacked_squares |= potential_moves(b, kingless, piece_at(b, position), position, 1);
 	}
 	return attacked_squares;
@@ -546,24 +541,22 @@ moves_t generate_moves(chessboard_t* b) {
 	bitboard_t enpassant = b->en_passant_square != -1 ? 1ull << b->en_passant_square : 0ull;
 	bitboard_t enpassant_pawn = b->side ? enpassant << 8 : enpassant >> 8;
 
-	int king = bitboard_lowest(b->pieces[wking + 6*b->side]);
 	// TODO: fix this - shouldnt ever happen
-	if (king == 64) {
-		print_chessboard(b);
-		return moves;
-	}
+	// if (!b->pieces[wking + 6*b->side]) {
+	// 	print_chessboard(b);
+	// 	return moves;
+	// }
+	int king = bitboard_lowest(b->pieces[wking + 6*b->side]);
 	bitboard_t options = king_attacks[king] & ~(attacked_squares | our);
-	bitboard_t attacks = options & other;
-	bitboard_t movement = options & ~other;
-	append_all_options(&moves, king, attacks, 0x4);
-	append_all_options(&moves, king, movement, 0x0);
+	append_all_options(&moves, king, options & other, 0x4);
+	append_all_options(&moves, king, options & ~other, 0x0);
 
 	bitboard_t checkers = 0ull;
-	if (b->side) {
-		checkers |= flip_horizontal(pawn_attacks[king^56]) & b->pieces[wpawn];
-	} else {
-		checkers |= pawn_attacks[king] & b->pieces[bpawn];
-	}
+
+	checkers |= b->side
+		? flip_horizontal(pawn_attacks[king^56]) & b->pieces[wpawn]
+		: pawn_attacks[king] & b->pieces[bpawn];
+
 	checkers |= knight_attacks[king] & b->pieces[bknight - 6*b->side];
 	checkers |= get_rook_attacks(king, all) & (b->pieces[brook - 6*b->side] | b->pieces[bqueen - 6*b->side]);
 	checkers |= get_bishop_attacks(king, all) & (b->pieces[bbishop - 6*b->side] | b->pieces[bqueen - 6*b->side]);
@@ -581,7 +574,6 @@ moves_t generate_moves(chessboard_t* b) {
 				capture_mask |= enpassant;
 			}
 		}
-		// TODO: write it more cleanly
 		else if (piece == (bknight - 6*b->side) || piece == (bking - 6*b->side))
 			push_mask = 0x0ull;
 		else push_mask = bitboard_between(king, position);
@@ -591,18 +583,14 @@ moves_t generate_moves(chessboard_t* b) {
 		castling &= 0x3;
 		int flip = 56*b->side;
 		// queenside
-		if (castling&0x2) {
-			if (!(bitboard_between(king, flip) & all)
+		if (castling&0x2 && !(bitboard_between(king, flip) & all)
 				&& !(bitboard_between(king, 1^flip) & attacked_squares)) {
-				append_move(&moves, (0x3<<12) | ((2^flip)<<6) | king);
-			}
+			append_move(&moves, (0x3<<12) | ((2^flip)<<6) | king);
 		}
 
 		// kignside
-		if (castling&0x1) {
-			if (!(bitboard_between(king, 7^flip) & (all | attacked_squares))) {
-				append_move(&moves, (0x2<<12) | ((6^flip)<<6) | king);
-			}
+		if (castling&0x1 && !(bitboard_between(king, 7^flip) & (all | attacked_squares))) {
+			append_move(&moves, (0x2<<12) | ((6^flip)<<6) | king);
 		}
 	}
 
@@ -613,16 +601,13 @@ moves_t generate_moves(chessboard_t* b) {
 	bitboard_t orth = b->pieces[brook - 6*b->side] | b->pieces[bqueen - 6*b->side];
 
 	bitboard_t potential_pinned = our
-		& ~(b->pieces[wking + 6*b->side])
-		& (get_bishop_attacks(king, all & ~enpassant_pawn) | get_rook_attacks(king, all & ~enpassant_pawn));
+		& (get_bishop_attacks(king, all) | get_rook_attacks(king, all & ~enpassant_pawn));
 
 	while (potential_pinned) {
-		int pos = bitboard_lowest(potential_pinned);
-		potential_pinned &= ~(1ull<<pos);
-
+		int pos = bitboard_poplsb(&potential_pinned);
 		piece_t piece = piece_at(b, pos);
+
 		bitboard_t diag_pin = get_bishop_attacks(king, all & ~(1ull<<pos)) & diag & ~checkers;
-		bitboard_t orth_pin = get_rook_attacks(  king, all & ~(1ull<<pos)) & orth & ~checkers;
 		if (diag_pin) {
 			pinned_pieces |= 1ull << pos;
 			bitboard_t mask = bitboard_between(king, bitboard_lowest(diag_pin))
@@ -630,60 +615,47 @@ moves_t generate_moves(chessboard_t* b) {
 
 			if (piece == wknight + 6*b->side || piece == wrook + 6*b->side) {}
 			else if (piece == wpawn + 6*b->side) {
-				int is_promoting = b->side ? pos <= 15 : pos >= 48;
-				if (is_promoting) {
-					bitboard_t options = potential_moves(b, all, wpawn +
-							6*b->side, pos, 1)
-						& other
-						& (push_mask | capture_mask)
-						& ~our
-						& mask;
-					// should only be one bit - cant be pinned by multiple
-					// bishops at once to only one king
-					int to = bitboard_lowest(options);
-					move_t move = ((0x8 | 0x4)<<12) | (to<<6) | pos;
-					for (int i = 0; i < 4; i++)
-						append_move(&moves, move | (i<<12));
-				} else {
-					append_all_options(
-							&moves, pos,
-							potential_moves(b, all, wpawn + 6*b->side, pos, 1)
-							& other
-							& (push_mask | capture_mask)
-							& ~our
-							& mask,
-							0x4
-							);
-					append_all_options(
-							&moves, pos,
-							potential_moves(b, all, wpawn + 6*b->side, pos, 1)
-							& enpassant
-							& (push_mask | capture_mask)
-							& ~our
-							& mask,
-							0x5
-							);
+				unsigned is_promoting = b->side ? pos <= 15 : pos >= 48;
+				bitboard_t all_captures = potential_moves(b, all, wpawn + 6*b->side, pos, 1)
+					& (push_mask | capture_mask)
+					& mask;
+				// should only be one bit - cant be pinned by multiple
+				// bishops at once to only one king
+				bitboard_t captures = all_captures & other;
+				bitboard_t enpascap = all_captures & enpassant;
+				move_t move = (0x4<<12) | pos;
+				if (captures) {
+					int to = bitboard_lowest(captures);
+					if (is_promoting) {
+						move |= (0x8<<12) | (to<<6);
+						for (int i = 0; i < 4; i++)
+							append_move(&moves, (i<<12) | move);
+					} else
+						append_move(&moves, move | (to<<6));
 				}
+				if (enpascap)
+					append_move(&moves, (0x5<<12) | (b->en_passant_square<<6) | pos);
+
 			} else {
 				append_all_options(&moves, pos,
-						potential_moves(b, all, piece_at(b, pos), pos, 0)
+						potential_moves(b, all, piece, pos, 0)
 						& other
 						& (push_mask | capture_mask)
-						& ~our
 						& mask,
 						0x4
 						);
 				append_all_options(&moves, pos,
-						potential_moves(b, all, piece_at(b, pos), pos, 0)
-						& ~other
+						potential_moves(b, all, piece, pos, 0)
+						& ~all
 						& (push_mask | capture_mask)
-						& ~our
 						& mask,
 						0x0
 						);
 			}
+			continue;
 		}
-		if (orth_pin) {
+		bitboard_t orth_pin = get_rook_attacks(king, all & ~(1ull<<pos)) & orth & ~checkers;
+		 if (orth_pin) {
 			pinned_pieces |= 1ull << pos;
 			bitboard_t mask = bitboard_between(king, bitboard_lowest(orth_pin))
 				| orth_pin;
@@ -694,111 +666,134 @@ moves_t generate_moves(chessboard_t* b) {
 										& ~all
 										& mask;
 				while (options) {
-					int to = bitboard_lowest(options);
-					options &= ~(1ull<<to);
+					int to = bitboard_poplsb(&options);
 					append_move(&moves, ((abs(pos - to) == 16)<<12) | (to<<6) | pos);
 				}
 			} else {
 				append_all_options(&moves, pos,
-						potential_moves(b, all, piece_at(b, pos), pos, 1)
+						potential_moves(b, all, piece, pos, 1)
 						& other
 						& (push_mask | capture_mask)
-						& ~our
 						& mask,
 						0x4
 						);
 				append_all_options(&moves, pos,
-						potential_moves(b, all, piece_at(b, pos), pos, 0)
-						& ~other
+						potential_moves(b, all, piece, pos, 0)
+						& ~all
 						& (push_mask | capture_mask)
-						& ~our
 						& mask,
 						0x0
 						);
 			}
-		}
-		if (!orth_pin && !diag_pin) {
-			bitboard_t enpassant_pin = 0ull;
-			if (piece == wpawn + 6*b->side) {
-				enpassant_pin = get_rook_attacks(king, (all | enpassant) & ~(1ull<<pos | enpassant_pawn)) & orth & ~checkers;
-			}
-
-			if (enpassant_pin) {
-				pinned_pieces |= 1ull << pos;
-				// can do basically anything except enpassant
-				bitboard_t captures = potential_moves(b, all, wpawn + 6*b->side, pos, 1)
-					& other
-					& (push_mask | capture_mask)
-					& ~our;
-				bitboard_t movement = potential_moves(b, all, wpawn +
-						6*b->side, pos, 0)
-					& (push_mask | capture_mask)
-					& ~all;
-				append_all_options(&moves, pos, captures, 0x4);
-				append_all_options(&moves, pos, movement, 0x0);
-			}
-		}
+			continue;
+		 }
+		 if (piece == wpawn + 6*b->side && get_rook_attacks(king, all ^ (1ull<<pos | enpassant_pawn | enpassant)) & orth & ~checkers) {
+			pinned_pieces |= 1ull << pos;
+			// can do basically anything except enpassant
+			// special ep mask?
+			append_all_options(&moves, pos,
+					potential_moves(b, all, wpawn + 6*b->side, pos, 1)
+						& other
+						& (push_mask | capture_mask),
+					0x4);
+			append_all_options(&moves, pos,
+					potential_moves(b, all, wpawn + 6*b->side, pos, 0)
+						& (push_mask | capture_mask)
+						& ~all,
+					0x0);
+		 }
 	}
 
-	// TODO: finish this
-	// for (int p = 6*b->side; p < 5+6*b->side; p++) {
-	// 	bitboard_t pieces = b->pieces[p] & ~pinned_pieces;
-	// 	while (pieces) {
-	// 		int from = bitboard_lowest(pieces);
-	// 		pieces &= ~(1ull<<from);
-	// 	}
-	// }
-
-	bitboard_t movers = our & ~(b->pieces[wking + 6*b->side] | pinned_pieces);
-	while (movers) {
-		int from = bitboard_lowest(movers);
-		movers &= ~(1ull<<from);
-
-		piece_t p = piece_at(b, from);
-		bitboard_t captures;
-		bitboard_t movement;
-		if (p == wpawn + 6*b->side) {
-			captures = potential_moves(b, all, wpawn + 6*b->side, from, 1)
-				& other
-				& (push_mask | capture_mask)
-				& ~our;
-			movement = potential_moves(b, all, wpawn + 6*b->side, from, 0)
-				& (push_mask | capture_mask)
-				& ~all;
-			int is_promoting = b->side ? from <= 15 : from >= 48;
-			if (is_promoting) {
-				while (captures) {
-					int to = bitboard_lowest(captures);
-					captures &= ~(1ull<<to);
-					move_t move = ((0x8 | 0x4)<<12) | (to<<6) | from;
+	// TODO: make this cleaner
+	// also do this for knights too
+	bitboard_t pawns = b->pieces[wpawn + 6*b->side] & ~pinned_pieces;
+	if (pawns) {
+		if (b->side) {
+			bitboard_t advance = (pawns >> 8) & ~all;
+			bitboard_t double_move = ((advance & 0xff0000000000ull) >> 8) & ~all & push_mask;
+			advance &= push_mask;
+			while (advance) {
+				int to = bitboard_poplsb(&advance);
+				if (to < 8)
 					for (int i = 0; i < 4; i++)
-						append_move(&moves, move | (i<<12));
-				}
-				while (movement) {
-					int to = bitboard_lowest(movement);
-					movement &= ~(1ull<<to);
-					move_t move = (0x8<<12) | (to<<6) | from;
-					for (int i = 0; i < 4; i++)
-						append_move(&moves, move | (i<<12));
-				}
-			} else {
-				append_all_options(&moves, from, potential_moves(b, all, wpawn + 6*b->side, from, 1)
-						& enpassant & (push_mask | capture_mask) & ~our, 0x5);
-				append_all_options(&moves, from, captures, 0x4);
-				while (movement) {
-					int to = bitboard_lowest(movement);
-					movement &= ~(1ull<<to);
-					append_move(&moves, ((abs(from-to)==16)<<12) | (to<<6) | from);
-				}
+						append_move(&moves, ((0x8|i)<<12) | (to<<6) | (to+8));
+				else append_move(&moves, (to<<6) | (to+8));
+			}
+			while (double_move) {
+				int to = bitboard_poplsb(&double_move);
+				append_move(&moves, (0x1<<12) | (to<<6) | (to+16));
 			}
 
-			// append_all_options(&moves, from, movement, 0);
+			bitboard_t pos_left  = ((pawns & ~0x8080808080808080) >> 7) & capture_mask;
+			bitboard_t pos_right = ((pawns & ~0x0101010101010101) >> 9) & capture_mask;
+			bitboard_t left_capture = pos_left & other;
+			bitboard_t right_capture = pos_right & other;
+			while (left_capture) {
+				int to = bitboard_poplsb(&left_capture);
+				if (to < 8)
+					for (int i = 0; i < 4; i++)
+						append_move(&moves, ((0x8|0x4|i)<<12) | (to<<6) | (to+7));
+				else append_move(&moves, (0x4<<12) | (to<<6) | (to+7));
+			}
+			while (right_capture) {
+				int to = bitboard_poplsb(&right_capture);
+				if (to < 8)
+					for (int i = 0; i < 4; i++)
+						append_move(&moves, ((0x8|0x4|i)<<12) | (to<<6) | (to+9));
+				else append_move(&moves, (0x4<<12) | (to<<6) | (to+9));
+			}
+			if (pos_left & enpassant)
+				append_move(&moves, (0x5<<12) | (b->en_passant_square<<6) | (b->en_passant_square+7));
+			if (pos_right & enpassant)
+				append_move(&moves, (0x5<<12) | (b->en_passant_square<<6) | (b->en_passant_square+9));
 		} else {
-			bitboard_t options = potential_moves(b, all, piece_at(b, from), from, 0)
-				& (push_mask | (capture_mask & ~enpassant))
-				& ~our;
+			bitboard_t advance = (pawns << 8) & ~all;
+			bitboard_t double_move = ((advance & 0xff0000ull) << 8) & ~all & push_mask;
+			advance &= push_mask;
+			while (advance) {
+				int to = bitboard_poplsb(&advance);
+				if (to > 55)
+					for (int i = 0; i < 4; i++)
+						append_move(&moves, ((0x8|i)<<12) | (to<<6) | (to-8));
+				else append_move(&moves, (to<<6) | (to-8));
+			}
+			while (double_move) {
+				int to = bitboard_poplsb(&double_move);
+				append_move(&moves, (0x1<<12) | (to<<6) | (to-16));
+			}
+
+			bitboard_t pos_left  = ((pawns & ~0x0101010101010101) << 7) & capture_mask;
+			bitboard_t pos_right = ((pawns & ~0x8080808080808080) << 9) & capture_mask;
+			bitboard_t left_capture = pos_left & other;
+			bitboard_t right_capture = pos_right & other;
+			while (left_capture) {
+				int to = bitboard_poplsb(&left_capture);
+				if (to > 55)
+					for (int i = 0; i < 4; i++)
+						append_move(&moves, ((0x8|0x4|i)<<12) | (to<<6) | (to-7));
+				else append_move(&moves, (0x4<<12) | (to<<6) | (to-7));
+			}
+			while (right_capture) {
+				int to = bitboard_poplsb(&right_capture);
+				if (to > 55)
+					for (int i = 0; i < 4; i++)
+						append_move(&moves, ((0x8|0x4|i)<<12) | (to<<6) | (to-9));
+				else append_move(&moves, (0x4<<12) | (to<<6) | (to-9));
+			}
+			if (pos_left & enpassant)
+				append_move(&moves, (0x5<<12) | (b->en_passant_square<<6) | (b->en_passant_square-7));
+			if (pos_right & enpassant)
+				append_move(&moves, (0x5<<12) | (b->en_passant_square<<6) | (b->en_passant_square-9));
+		}
+	}
+	for (int p = wknight+6*b->side; p < wking+6*b->side; p++) {
+		bitboard_t pieces = b->pieces[p] & ~pinned_pieces;
+		while (pieces) {
+			int from = bitboard_poplsb(&pieces);
+			bitboard_t options = potential_moves(b, all, p, from, 0)
+				& (push_mask | (capture_mask & ~enpassant));
 			append_all_options(&moves, from, options & other, 0x4);
-			append_all_options(&moves, from, options & ~other, 0);
+			append_all_options(&moves, from, options & ~all, 0);
 		}
 	}
 
@@ -806,12 +801,15 @@ moves_t generate_moves(chessboard_t* b) {
 }
 
 unsigned long long perft(chessboard_t* b, int depth, int print, unsigned long long* total_visited) {
-	++*total_visited;
-	unsigned long long r = 0;
+	if (total_visited)
+		++*total_visited;
 	if (depth == 0) return 1;
+
+	unsigned long long r = 0;
 	moves_t moves = generate_moves(b);
 	if (depth == 1) {
-		*total_visited += (unsigned long long)moves.num_moves;
+		if (total_visited)
+			*total_visited += (unsigned long long)moves.num_moves;
 		free(moves.moves);
 		return (unsigned long long)moves.num_moves;
 	}
@@ -828,8 +826,6 @@ unsigned long long perft(chessboard_t* b, int depth, int print, unsigned long lo
 		}
 
 		play_move(b, moves.moves[i]);
-		// if (!play_move(b, moves.moves[i]))
-		// 	continue;
 		unsigned long long n = perft(b, depth-1, 0, total_visited);
 		undo_move(b);
 
@@ -848,7 +844,7 @@ unsigned long long perft(chessboard_t* b, int depth, int print, unsigned long lo
 }
 
 // TODO: threefold repetition
-game_result_t game_result(chessboard_t* b) {
+inline game_result_t game_result(chessboard_t* b) {
 	int is_draw = 1;
 	for (int i = 0; i < 12; i++) {
 		if (i != wking && i != bking && b->pieces[i]) {

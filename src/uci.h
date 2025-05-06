@@ -12,6 +12,7 @@ typedef enum command_type {
 	cmd_unknown,
 	cmd_uci,
 	cmd_isready,
+	cmd_newgame,
 } command_type_t;
 
 // TODO: proper infinite
@@ -45,6 +46,7 @@ typedef struct search_parameter {
 	unsigned keep_running;
 	unsigned stop;
 	pthread_rwlock_t locks[4];
+	unsigned multithreaded;
 } search_parameter_t;
 
 uci_command_t parse_command(char* command);

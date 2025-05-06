@@ -18,6 +18,9 @@ typedef struct hash_element {
 	unsigned depth;
 	best_move_t best_move;
 	node_type_t type;
+
+	unsigned age;
+	unsigned char piece_count;
 } hash_element_t;
 
 typedef struct hash_table {
@@ -30,6 +33,8 @@ void init_hash_table(void);
 void destroy_hash_table(void);
 
 uint64_t hash_key(chessboard_t* b);
-hash_element_t* hash_index(uint64_t key);
+void hash_clear_unused(chessboard_t* b);
+hash_element_t  hash_get(uint64_t key);
+hash_element_t* hash_set(uint64_t key);
 
 extern uint64_t polyglot_random_array[781];

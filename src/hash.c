@@ -58,8 +58,27 @@ uint64_t hash_key(chessboard_t* b) {
 
 const int hash_growth_factor = 2;
 
+void hash_clear_unused(chessboard_t* b) {
+	unsigned char piece_count = bitboard_count(pieces_color(b, 0) |
+			pieces_color(b, 1));
+
+	for (unsigned i = 0; i < table.size; i++) {
+		if (table.elements[i].type == node_searching)
+			printf("node error\n");
+
+		if (table.elements[i].type != node_empty) {
+			if (table.elements[i].piece_count > piece_count
+					|| table.elements[i].age < b->ply-b->fiftymove) {
+				table.elements[i].type = node_empty;
+				table.num_elements--;
+			}
+		}
+	}
+}
+
 void hash_realloc(void) {
 	unsigned new_size = table.size*hash_growth_factor;
+	printf("%lu Mb\n", new_size*sizeof(hash_element_t) / 1024 / 1024);
 	hash_element_t* new_arr = calloc(new_size, sizeof(hash_element_t));
 	for (unsigned i = 0; i < new_size; i++) new_arr[i].type = node_empty;
 
@@ -80,7 +99,22 @@ void hash_realloc(void) {
 	table.size = new_size;
 }
 
-hash_element_t* hash_index(uint64_t key) {
+hash_element_t hash_get(uint64_t key) {
+	unsigned index = key % table.size;
+
+	while (table.elements[index].type != node_empty) {
+		if (table.elements[index].key == key) {
+			return table.elements[index];
+		}
+		index++;
+		if (index >= table.size) {
+			index = 0;
+		}
+	}
+	return (hash_element_t){0};
+}
+
+hash_element_t* hash_set(uint64_t key) {
 	if (table.num_elements*hash_growth_factor >= table.size) {
 		hash_realloc();
 	}
@@ -100,9 +134,6 @@ hash_element_t* hash_index(uint64_t key) {
 	return &table.elements[index];
 }
 
-// TODO:
-// hash_set entry?
-// more than just returning the index?
 
 
 

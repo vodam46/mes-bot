@@ -14,47 +14,62 @@ void print_bitboard(bitboard_t b) {
 	printf("\n");
 }
 
-bitboard_t flip_horizontal(bitboard_t b) {
+inline bitboard_t flip_horizontal(bitboard_t b) {
+#ifdef __GNUC__
+	return __builtin_bswap64(b);
+#else
 	// TODO: do it more optimized?
-	bitboard_t r = b;
-	unsigned char* p = (unsigned char*)&r;
+	// b = (b&0x00000000ffffffffull)<<32 | (b&0xffffffff00000000ull)>>32;
+	// b = (b&0x0000ffff0000ffffull)<<16 | (b&0xffff0000ffff0000ull)>>16;
+	// b = (b&0x00ff00ff00ff00ffull)<<8  | (b&0xff00ff00ff00ff00ull)>>8;
+	// return b;
+	unsigned char* p = (unsigned char*)&b;
 	for (int i = 0; i < 4; i++) {
 		unsigned char t = p[i];
 		p[i] = p[7-i];
 		p[7-i] = t;
 	}
-	return r;
+	return b;
+#endif
 }
 
-int bitboard_contains(bitboard_t b, int i) {
+inline int bitboard_contains(bitboard_t b, int i) {
 	return (b>>i)&1;
 }
 
-int bitboard_lowest(bitboard_t b) {
+inline int bitboard_lowest(bitboard_t b) {
 #ifdef __GNUC__
 	return __builtin_ctzll(b);
-#endif
+#else
 	bitboard_t upper = b & (b-1);
 	return bitboard_count((b ^ upper) - 1);
+#endif
 }
 
-int bitboard_count(bitboard_t b) {
+inline int bitboard_count(bitboard_t b) {
 #ifdef __GNUC__
 	return __builtin_popcountll(b);
-#endif
+#else
 	int c;
 	for (c = 0; b; c++, b &= b-1);
 	return c;
+#endif
+}
+
+inline int bitboard_poplsb(bitboard_t* b) {
+	int bit = bitboard_lowest(*b);
+	*b &= ~(1ull<<bit);
+	return bit;
 }
 
 bitboard_t random_bitboard(void) {
-	bitboard_t u1, u2, u3, u4;
-	u1 = (bitboard_t)(random()) & 0xFFFF; u2 = (bitboard_t)(random()) & 0xFFFF;
-	u3 = (bitboard_t)(random()) & 0xFFFF; u4 = (bitboard_t)(random()) & 0xFFFF;
-	return u1 | (u2 << 16) | (u3 << 32) | (u4 << 48);
+	bitboard_t u = 0ull;
+	for (int i = 0; i < 4; i++)
+		u |= (bitboard_t)(random()&0xffff) << (i*16);
+	return u;
 }
 
-bitboard_t bitboard_fewbits() {
+bitboard_t bitboard_fewbits(void) {
 	return random_bitboard() & random_bitboard() & random_bitboard();
 }
 
@@ -83,6 +98,6 @@ void init_bitboard_between(void) {
 	}
 }
 
-bitboard_t bitboard_between(int start, int end) {
+inline bitboard_t bitboard_between(int start, int end) {
 	return bitboard_betweens[start][end];
 }
