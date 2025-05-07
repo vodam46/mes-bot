@@ -189,10 +189,9 @@ void init_piece_square_tables(void) {
 
 
 inline int evaluate(chessboard_t* b) {
-	game_result_t game_res = game_result(b);
-	if (game_res == draw) return 0;
-	if (game_res == checkmate) return b->ply-INT_MAX;	// this should be correct
-															// if we find checkmate -> only search for shorter checkmates?
+	if (draw_material(b) || b->fiftymove >= 100)
+		return 0;
+	// game results shouldve been checked already in the main function
 	int mg[2] = {0, 0};
 	int eg[2] = {0, 0};
 	int phase = 0;
@@ -207,6 +206,7 @@ inline int evaluate(chessboard_t* b) {
 			}
 		}
 	}
+	// int mobility[2] = {0, 0};
 	int mgScore = mg[b->side] - mg[!b->side];
 	int egScore = eg[b->side] - eg[!b->side];
 	if (phase > 24) return mgScore;
@@ -214,10 +214,10 @@ inline int evaluate(chessboard_t* b) {
 }
 
 void print_pv(chessboard_t* b, unsigned d) {
-	uint64_t key = hash_key(b);
+	uint64_t key = b->key;
 	hash_element_t e = hash_get(key);
 	// maybe dont need to check the key?
-	if (e.key != key || e.best_move.move == 0 || d == 0) {
+	if (e.type == node_empty || e.key != key || e.best_move.move == 0 || d == 0) {
 		printf("\n");
 		return;
 	}
@@ -231,23 +231,37 @@ void print_pv(chessboard_t* b, unsigned d) {
 	undo_move(b);
 }
 
+// TODO: only check every so often
+inline unsigned should_stop(search_parameter_t* p) {
+	if (p->multithreaded)
+		pthread_mutex_lock(&p->locks[2]);
+	unsigned stop = p->stop;
+	if (p->multithreaded)
+		pthread_mutex_unlock(&p->locks[2]);
+	return stop;
+}
+
+// void order_moves(chessboard_t* b, moves_t m, hash_element_t e) {
+
+// }
+
+unsigned is_checkmate(int score) {
+	return score != INT_MIN && (score < -INT_MAX/2 || score > INT_MAX/2);
+}
+
 best_move_t negamax(chessboard_t* b, int alpha, int beta, unsigned depth,
 		search_parameter_t* p) {
 
 	if (p) {
-		if (p->multithreaded)
-			pthread_rwlock_rdlock(&p->locks[3]);
-		unsigned stop = p->stop;
-		if (p->multithreaded)
-			pthread_rwlock_unlock(&p->locks[3]);
-		if (stop) return (best_move_t){0, 0};
+		p->nodes_visited++;
+		if ((p->nodes_visited & 2047) == 0 && should_stop(p)) return (best_move_t){0, 0};
 	}
 
 	int alphaorig = alpha;
 
 	best_move_t bm = {.move=0, .score=INT_MIN};
 
-	uint64_t key = hash_key(b);
+	uint64_t key = b->key;
 	hash_element_t entry_g = hash_get(key);
 	if (entry_g.type != node_empty && entry_g.depth >= depth) {
 		if (entry_g.type == node_exact) {
@@ -261,18 +275,26 @@ best_move_t negamax(chessboard_t* b, int alpha, int beta, unsigned depth,
 		}
 	}
 
-	if (depth == 0 || (game_result(b) != ongoing))
-		// TODO: quiescence search
-		return (best_move_t){.move=0, .score=evaluate(b)};
-
 	moves_t moves = generate_moves(b);
-	// if (moves.num_moves == 0) {
-	// 	free(moves.moves);
-	// 	// TODO: check if its a draw or checkmate
-	// 	if (b->pieces[wking + 6*b->side] & get_attacked_squares(b));
-	// }
+	if (moves.num_moves == 0) {
+		free(moves.moves);
+		return (best_move_t){
+			.score=
+				(b->pieces[wking + 6*b->side] & get_attacked_squares(b))
+				? b->ply - INT_MAX
+				: 0
+		};
+	}
 
-	// if (moves.num_moves == 1) depth++;
+	if (depth == 0) {
+		// TODO: quiescence search
+		free(moves.moves);
+		return (best_move_t){.score=evaluate(b)};
+	}
+
+	// order_moves(b, moves, entry_g);
+
+	if (moves.num_moves == 1) depth++;
 
 	for (int i = 0; i < moves.num_moves; i++) {
 		move_t move = moves.moves[i];
@@ -280,14 +302,7 @@ best_move_t negamax(chessboard_t* b, int alpha, int beta, unsigned depth,
 		int score = -negamax(b, -beta, -alpha, depth-1, p).score;
 		undo_move(b);
 
-		if (p) {
-			if (p->multithreaded)
-				pthread_rwlock_rdlock(&p->locks[3]);
-			unsigned stop = p->stop;
-			if (p->multithreaded)
-				pthread_rwlock_unlock(&p->locks[3]);
-			if (stop) return (best_move_t){0, 0};
-		}
+		if (p && (p->nodes_visited & 2047) == 0 && should_stop(p)) return (best_move_t){0, 0};
 
 		if (score > bm.score) {
 			bm.score = score;
@@ -301,18 +316,19 @@ best_move_t negamax(chessboard_t* b, int alpha, int beta, unsigned depth,
 			break;
 	}
 
-	hash_element_t* entry = hash_set(key);
+	hash_element_t entry;
 	if (bm.score <= alphaorig) {
-		entry->type = node_upper;
+		entry.type = node_upper;
 	} else if (bm.score >= beta) {
-		entry->type = node_lower;
+		entry.type = node_lower;
 	} else {
-		entry->type = node_exact;
+		entry.type = node_exact;
 	}
-	entry->best_move = bm;
-	entry->depth = depth;
-	entry->piece_count = bitboard_count(pieces_color(b, 0) | pieces_color(b, 1));
-	entry->age = b->ply - b->fiftymove;
+	entry.best_move = bm;
+	entry.depth = depth;
+	entry.piece_count = bitboard_count(pieces_color(b, 0) | pieces_color(b, 1));
+	entry.age = b->ply - b->fiftymove;
+	hash_set(key, entry);
 
 	free(moves.moves);
 	return bm;
@@ -321,14 +337,23 @@ best_move_t negamax(chessboard_t* b, int alpha, int beta, unsigned depth,
 int print = 1;
 unsigned maxdepth = 8;
 
+void print_info(unsigned depth, best_move_t bm, search_parameter_t* p) {
+	if (!print) return;
+	char string[6] = {0};
+	move_to_string(bm.move, string);
+	printf("info depth %u core cp %d nodes %llu pv", depth, bm.score, p ? p->nodes_visited : 0);
+	print_pv(p->chessboard, 1);
+	fflush(stdout);
+}
+
 best_move_t iterative_deepener(search_parameter_t* p) {
-	unsigned long long start = timeInMilliseconds();
-	printf("start %llu\n", start);
+	// unsigned long long start = timeInMilliseconds();
+	// printf("start   %llu\n", start);
 	if (p->multithreaded)
-		pthread_rwlock_rdlock(&p->locks[0]);
+		pthread_mutex_lock(&p->locks[0]);
 	limit_t limit = p->limit;
 	if (p->multithreaded)
-		pthread_rwlock_unlock(&p->locks[0]);
+		pthread_mutex_unlock(&p->locks[0]);
 
 	hash_clear_unused(p->chessboard);
 
@@ -336,44 +361,21 @@ best_move_t iterative_deepener(search_parameter_t* p) {
 	if (best_move.move == 0)
 		printf("null move!!!\n");
 
-	if (print) {
-		char string[6] = {0};
-		move_to_string(best_move.move, string);
-		printf("info depth %u core cp %d pv", 1, best_move.score);
-		print_pv(p->chessboard, 1);
-		fflush(stdout);
-	}
+	print_info(1, best_move, p);
 
 	unsigned cur_depth;
 	for (cur_depth=2; cur_depth <= limit.depth; cur_depth++) {
 		best_move_t bm = negamax(p->chessboard, -INT_MAX, INT_MAX, cur_depth, p);
 
-		if (p->multithreaded)
-			pthread_rwlock_rdlock(&p->locks[3]);
-		unsigned stop = p->stop;
-		if (p->multithreaded)
-			pthread_rwlock_unlock(&p->locks[3]);
-		if (stop) break;
+		if (should_stop(p)) break;
 
-		if (print) {
-			char string[6] = {0};
-			move_to_string(bm.move, string);
-			printf("info depth %u score cp %d pv", cur_depth, bm.score);
-			print_pv(p->chessboard, cur_depth);
-			fflush(stdout);
-		}
 
 		best_move = bm;
+		print_info(cur_depth, best_move, p);
+		if (is_checkmate(bm.score)) break;
 	}
 
-	if (print) {
-		char string[6] = {0};
-		move_to_string(best_move.move, string);
-		printf("info depth %u score cp %d pv", cur_depth-1, best_move.score);
-		print_pv(p->chessboard, cur_depth);
-		printf("\n");
-		fflush(stdout);
-	}
+	print_info(cur_depth-1, best_move, p);
 
 	return best_move;
 }
@@ -383,7 +385,8 @@ best_move_t best_move(chessboard_t* b) {
 	p.chessboard = b;
 	p.multithreaded = 0;
 	p.stop = 0;
-	p.limit.depth = 7;
+	p.limit.depth = 8;
+	p.nodes_visited = 0;
 
 	return iterative_deepener(&p);
 }

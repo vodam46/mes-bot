@@ -63,6 +63,7 @@ typedef struct chessboard {
 	unsigned fiftymove;
 	unsigned ply;
 
+	uint64_t key;
 	/*
 	 * repetition checking
 		 * linked list of previous positions?
@@ -98,6 +99,8 @@ void move_to_string(move_t m, char s[5]);
 void print_moves(moves_t m);
 void print_game_history(chessboard_t* b);
 
+unsigned can_ep(chessboard_t* b, int side);
+
 int play_move(chessboard_t* b, move_t m);
 int undo_move(chessboard_t* b);
 
@@ -112,4 +115,6 @@ typedef enum game_result {
 	checkmate,
 	draw
 } game_result_t;
+
+unsigned draw_material(chessboard_t* b);
 game_result_t game_result(chessboard_t* b);

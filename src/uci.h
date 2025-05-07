@@ -13,6 +13,10 @@ typedef enum command_type {
 	cmd_uci,
 	cmd_isready,
 	cmd_newgame,
+
+	// debug commands
+	cmd_print,
+	cmd_undo,
 } command_type_t;
 
 // TODO: proper infinite
@@ -26,9 +30,7 @@ typedef struct limit {
 typedef struct uci_command {
 	command_type_t type;
 	union {
-		unsigned depth;
 		chessboard_t* board;
-		char* position;
 		limit_t limit;
 	} args;
 } uci_command_t;
@@ -37,17 +39,19 @@ typedef struct time_management {
 	unsigned long long start_time;
 	unsigned total_time;
 	unsigned increment;
-	unsigned finished;
+	unsigned stop;
+	pthread_mutex_t lock;
 } time_management_t;
 
 typedef struct search_parameter {
 	limit_t limit;
 	chessboard_t* chessboard;
-	unsigned keep_running;
 	unsigned stop;
-	pthread_rwlock_t locks[4];
+	pthread_mutex_t locks[3];
+
 	unsigned multithreaded;
+	unsigned long long nodes_visited;
 } search_parameter_t;
 
 uci_command_t parse_command(char* command);
-void uci_loop(void);
+void uci(void);

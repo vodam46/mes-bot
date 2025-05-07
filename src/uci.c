@@ -1,18 +1,18 @@
-// TODO: stop using rwlock for everything
+// TODO: rewrite this, again
+// use pthread_cond_t
 #include <stdio.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <limits.h>
+#include <unistd.h>
 
-#include "globals.h"
+#include "uci.h"
 #include "chess.h"
 #include "engine.h"
 #include "hash.h"
+#include "globals.h"
 #include "magic.h"
-#include "uci.h"
-
 
 char* startfen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
@@ -21,7 +21,7 @@ uci_command_t parse_command(char* command) {
 	if (!strncmp(command, "go", 2)) {
 		if (!strncmp(command, "go perft", 8)) {
 			cmd.type = cmd_perft;
-			cmd.args.depth = atoi(command+9);
+			cmd.args.limit.depth = atoi(command+9);
 		} else {
 			cmd.type = cmd_search;
 			cmd.args.limit = (limit_t){
@@ -83,47 +83,116 @@ uci_command_t parse_command(char* command) {
 		}
 	} else if (!strncmp(command, "isready", 7)) {
 		cmd.type = cmd_isready;
+
+	// debug commands
+	} else if (!strncmp(command, "print", 5)) {
+		cmd.type = cmd_print;
+	} else if (!strncmp(command, "undo", 4)) {
+		cmd.type = cmd_undo;
 	}
 	return cmd;
 }
 
+pthread_t time_thread,
+		  search_thread;
 
+unsigned quit = 0;
+pthread_mutex_t qlock;
 
-pthread_t search_thread;
-pthread_t time_thread;
-pthread_t input_thread;
+time_management_t timem = {.stop=1};
+search_parameter_t searchm = {.stop=1};
 
-time_management_t time_management;
-pthread_rwlock_t timelock;
-search_parameter_t* search = NULL;
+unsigned getquit(void) {
+	pthread_mutex_lock(&qlock);
+	unsigned q = quit;
+	pthread_mutex_unlock(&qlock);
+	return q;
+}
+
+void uci_stop(void) {
+	pthread_mutex_lock(&searchm.locks[2]);
+	searchm.stop = 1;
+	pthread_mutex_unlock(&searchm.locks[2]);
+	pthread_mutex_lock(&timem.lock);
+	timem.stop = 1;
+	pthread_mutex_unlock(&timem.lock);
+}
+
+void uci_quit(void) {
+	uci_stop();
+	pthread_mutex_lock(&qlock);
+	quit = 1;
+	pthread_mutex_unlock(&qlock);
+
+}
+
+void uci_position(chessboard_t* b) {
+	if (b == NULL)
+		b = init_chessboard(startfen);
+	pthread_mutex_lock(&searchm.locks[1]);
+	if (searchm.chessboard)
+		free(searchm.chessboard);
+	searchm.chessboard = b;
+	pthread_mutex_unlock(&searchm.locks[1]);
+}
+
+void uci_go(limit_t limit) {
+	// printf("declare %llu\n", timeInMilliseconds());
+	pthread_mutex_lock(&searchm.locks[0]);
+	searchm.limit = limit;
+	pthread_mutex_unlock(&searchm.locks[0]);
+
+	pthread_mutex_lock(&searchm.locks[1]);
+	if (searchm.chessboard == NULL)
+		searchm.chessboard = init_chessboard(startfen);
+	unsigned side = searchm.chessboard->side;
+	pthread_mutex_unlock(&searchm.locks[1]);
+
+	pthread_mutex_lock(&searchm.locks[2]);
+	searchm.nodes_visited = 0ull;
+	searchm.stop = 0;
+	pthread_mutex_unlock(&searchm.locks[2]);
+
+	if (limit.time[side] == UINT_MAX) return;
+	pthread_mutex_lock(&timem.lock);
+	timem.stop = 0;
+	timem.start_time = timeInMilliseconds();
+	timem.total_time = limit.time[side];
+	timem.increment = limit.inc[side];
+	pthread_mutex_unlock(&timem.lock);
+}
 
 void* time_loop(void* a) {
-	while (1) {
-		pthread_rwlock_rdlock(&search->locks[3]);
-		unsigned loop = search->keep_running;
-		pthread_rwlock_unlock(&search->locks[3]);
-		if (!loop) return a;
+	while (!getquit()) {
+		pthread_mutex_lock(&timem.lock);
+		unsigned stop = timem.stop;
+		pthread_mutex_unlock(&timem.lock);
+		if (stop) continue;
 
-		pthread_rwlock_rdlock(&timelock);
-		time_management_t time = time_management;
-		pthread_rwlock_unlock(&timelock);
-		if (time.finished) continue;
+		pthread_mutex_lock(&timem.lock);
+		unsigned long long st = timem.start_time;
+		unsigned et = timem.total_time;
+		unsigned in = timem.increment == UINT_MAX ? 0 : timem.increment;
+		pthread_mutex_unlock(&timem.lock);
 
-		while (!time.finished && timeInMilliseconds() - time.start_time < time.total_time/20) {
-			usleep(10);
-			pthread_rwlock_rdlock(&timelock);
-			time = time_management;
-			pthread_rwlock_unlock(&timelock);
+		// printf("st: %llu\net: %u\nin: %u\n", st, et, in);
+
+		if (et == UINT_MAX)
+			continue;
+
+		unsigned wait = et/20 + in/2;
+		if (wait > et)
+			wait = et-100;
+		if (wait > et)
+			wait = et/2;
+
+		while (!getquit() && timeInMilliseconds() < st + wait) {
+			usleep(1000);
 		}
-
-		pthread_rwlock_wrlock(&search->locks[3]);
-		search->stop = 1;
-		pthread_rwlock_unlock(&search->locks[3]);
-
-		pthread_rwlock_wrlock(&timelock);
-		time_management.finished = 1;
-		pthread_rwlock_unlock(&timelock);
+		uci_stop();
 	}
+	printf("time loop stopped\n");
+	return a;
 }
 
 void* search_loop(void* a) {
@@ -133,32 +202,27 @@ void* search_loop(void* a) {
 	init_piece_square_tables();
 	init_hash_table();
 
-	while (1) {
-		pthread_rwlock_rdlock(&search->locks[3]);
-		unsigned loop = search->keep_running;
-		pthread_rwlock_unlock(&search->locks[3]);
-		if (!loop) break;
-
-		pthread_rwlock_rdlock(&search->locks[3]);
-		unsigned stop = search->stop;
-		pthread_rwlock_unlock(&search->locks[3]);
+	while (!getquit()) {
+		pthread_mutex_lock(&searchm.locks[2]);
+		unsigned stop = searchm.stop;
+		pthread_mutex_unlock(&searchm.locks[2]);
 		if (stop) continue;
 
-		pthread_rwlock_wrlock(&search->locks[1]);
-		best_move_t bm = find_best_move(search);
-		pthread_rwlock_unlock(&search->locks[1]);
-
-		pthread_rwlock_wrlock(&search->locks[3]);
-		search->stop = 1;
-		pthread_rwlock_unlock(&search->locks[3]);
+		// printf("starting search\n");
+		pthread_mutex_lock(&searchm.locks[1]);
+		best_move_t bm = find_best_move(&searchm);
+		pthread_mutex_unlock(&searchm.locks[1]);
 
 		char string[6] = {0};
 		move_to_string(bm.move, string);
 		printf("bestmove %s\n", string);
 		fflush(stdout);
+
+		pthread_mutex_lock(&searchm.locks[2]);
+		searchm.stop = 1;
+		pthread_mutex_unlock(&searchm.locks[2]);
 	}
-	printf("search thread stopped\n");
-	destroy_hash_table();
+	printf("search loop stopped\n");
 	return a;
 }
 
@@ -167,138 +231,106 @@ void input_loop(void) {
 	while (1) {
 		char* command = NULL;
 		size_t size = 0;
-		ssize_t chars = getline(&command, &size, stdin);
-		if (chars < 0) {
+		if (getline(&command, &size, stdin) < 0) {
 			free(command);
-			exit(0);
-		}
-		uci_command_t cmd = parse_command(command);
-		// rewrite as switch case?
-		if (cmd.type == cmd_unknown) {
-			printf("Unknown command [%.*s]\n", (int)chars - (command[chars-1]=='\n'), command);
-		}
-		free(command);
-
-		if (cmd.type == cmd_uci) {
-			printf("id name meš\n");
-			printf("id author Ada (@vodam)\n");
-			printf("uciok\n");
-		}
-
-		if (cmd.type == cmd_isready) {
-			printf("readyok\n");
-		}
-
-		if (cmd.type == cmd_stop || cmd.type == cmd_quit) {
-			pthread_rwlock_wrlock(&search->locks[3]);
-			search->stop = 1;
-			pthread_rwlock_unlock(&search->locks[3]);
-
-			pthread_rwlock_wrlock(&timelock);
-			time_management.finished = 1;
-			pthread_rwlock_unlock(&timelock);
-		}
-
-		if (cmd.type == cmd_quit) {
-			printf("quitting\n");
-			pthread_rwlock_wrlock(&search->locks[2]);
-			search->keep_running = 0;
-			pthread_rwlock_unlock(&search->locks[2]);
+			printf("bad command\n");
+			uci_quit();
 			return;
 		}
+		uci_command_t cmd = parse_command(command);
+		switch(cmd.type) {
+			case cmd_quit:
+				uci_quit();
+				printf("input loop stopped\n");
+				return;
 
-		if (cmd.type == cmd_position) {
-			pthread_rwlock_wrlock(&search->locks[1]);
-			if (search->chessboard) {
-				free(search->chessboard);
-				search->chessboard = NULL;
-			}
-			search->chessboard = cmd.args.board;
-			pthread_rwlock_unlock(&search->locks[1]);
+			case cmd_search:
+				uci_go(cmd.args.limit);
+				break;
+
+			case cmd_position:
+				uci_position(cmd.args.board);
+				break;
+
+			case cmd_stop:
+				uci_stop();
+				break;
+
+			case cmd_perft:
+				pthread_mutex_lock(&searchm.locks[1]);
+				if (searchm.chessboard == NULL)
+					searchm.chessboard = init_chessboard(startfen);
+				printf("total nodes: %llu\n", perft(searchm.chessboard, cmd.args.limit.depth, 1, NULL));
+				pthread_mutex_unlock(&searchm.locks[1]);
+				break;
+
+			case cmd_unknown:
+				printf("unknown command %s\n", command);
+				break;
+
+			case cmd_uci:
+				printf("id name meš\n");
+				printf("id author Ada (@vodam)\n");
+				printf("uciok\n");
+				break;
+
+			case cmd_isready:
+				printf("readyok\n");
+				break;
+
+			case cmd_newgame:
+				printf("clearing hash\n");
+				destroy_hash_table();
+				init_hash_table();
+				break;
+
+			case cmd_print:
+				if (searchm.chessboard == NULL) {
+					printf("(nil)\n");
+					break;
+				}
+				print_chessboard(searchm.chessboard);
+				printf("cur: %lx\nite: %lx\n", hash_key(searchm.chessboard),
+						searchm.chessboard->key);
+				break;
+
+			case cmd_undo:
+				undo_move(searchm.chessboard);
+				print_chessboard(searchm.chessboard);
+				break;
 		}
-
-		if (cmd.type == cmd_perft) {
-			pthread_rwlock_wrlock(&search->locks[1]);
-			if (search->chessboard == NULL) {
-				search->chessboard = init_chessboard(startfen);
-			}
-			unsigned long long total = 0;
-			printf("total nodes: %llu\n", perft(search->chessboard, cmd.args.depth, 1, &total));
-			printf("total visited: %llu\n", total);
-			pthread_rwlock_unlock(&search->locks[1]);
-		}
-
-		if (cmd.type == cmd_search) {
-			printf("declare %llu\n", timeInMilliseconds());
-			pthread_rwlock_wrlock(&search->locks[1]);
-			if (search->chessboard == NULL)
-				search->chessboard = init_chessboard(startfen);
-			unsigned side = search->chessboard->side;
-			pthread_rwlock_unlock(&search->locks[1]);
-
-			pthread_rwlock_wrlock(&search->locks[3]);
-			search->stop = 0;
-			pthread_rwlock_unlock(&search->locks[3]);
-
-			pthread_rwlock_wrlock(&timelock);
-			time_management.finished = 0;
-			time_management.start_time = timeInMilliseconds();
-			time_management.total_time = cmd.args.limit.time[side];
-			time_management.increment = cmd.args.limit.inc[side];
-			pthread_rwlock_unlock(&timelock);
-
-			pthread_rwlock_wrlock(&search->locks[0]);
-			search->limit = cmd.args.limit;
-			pthread_rwlock_unlock(&search->locks[0]);
-		}
-
-		if (cmd.type == cmd_newgame) {
-			printf("clearing the hash table\n");
-			destroy_hash_table();
-			init_hash_table();
-		}
-
 		fflush(stdout);
-
-		// sleep(1);		// give some time between commands for the search thread to go
-						// (maybe not the best idea, uci is meant to be responsive)
-						// also its probably not needed, the thread should wait
-						// until input
+		free(command);
 	}
 }
 
-void uci_loop(void) {
-	search = calloc(1, sizeof(search_parameter_t));
-	search->stop = 1;
-	search->keep_running = 1;
-	search->multithreaded = 1;
-	time_management.finished = 1;
-	for (int i = 0; i < 4; i++) {
-		if (pthread_rwlock_init(&search->locks[i], NULL)) {
+void uci(void) {
+	for (int i = 0; i < 3; i++)
+		if (pthread_mutex_init(&searchm.locks[i], NULL)) {
 			printf("Thread lock init failure\n");
 			exit(1);
 		}
+	if (pthread_mutex_init(&timem.lock, NULL)) {
+		printf("Thread lock init failure\n");
+		exit(1);
 	}
-	if (pthread_rwlock_init(&timelock, NULL)) {
+	if (pthread_mutex_init(&qlock, NULL)) {
 		printf("Thread lock init failure\n");
 		exit(1);
 	}
 
-	int error;
-
-	error = pthread_create(&search_thread, NULL, &search_loop, NULL);
-	if (error) printf("%s\n", strerror(error));
-	error = pthread_create(&time_thread, NULL, &time_loop, NULL);
-	if (error) printf("%s\n", strerror(error));
+	int err = pthread_create(&search_thread, NULL, &search_loop, NULL);
+	if (err) printf("%s\n", strerror(err));
+	err = pthread_create(&time_thread, NULL, &time_loop, NULL);
+	if (err) printf("%s\n", strerror(err));
 
 	input_loop();
 
 	pthread_join(time_thread, NULL);
 	pthread_join(search_thread, NULL);
 
-	for (int i = 0; i < 4; i++) {
-		pthread_rwlock_destroy(&search->locks[i]);
-	}
-	pthread_rwlock_destroy(&timelock);
-	free(search);
+	for (int i = 0; i < 3; i++)
+		pthread_mutex_destroy(&searchm.locks[i]);
+	pthread_mutex_destroy(&qlock);
+	pthread_mutex_destroy(&timem.lock);
 }

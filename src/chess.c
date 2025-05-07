@@ -4,6 +4,7 @@
 #include <stdbool.h>
 
 #include "chess.h"
+#include "hash.h"
 #include "magic.h"
 
 char piece_chars[12] = "PNBRQKpnbrqk";
@@ -117,7 +118,14 @@ void init_attack_bitboard(void) {
 #undef in_bounds
 
 void print_chessboard(chessboard_t* b) {
-	printf("%s %u:\n", b->side ? "black" : "white", b->ply);
+	printf("%s %u ", b->side ? "black" : "white", b->ply);
+	char castling[4] = "KQkq";
+	for (int i = 0; i < 4; i++)
+		if ((b->castling_rights>>i)&1)
+			printf("%c", castling[i]);
+	if (b->en_passant_square != -1)
+		printf("ep: %d", b->en_passant_square);
+	printf("\n");
 	for (int rank = 7; rank >= 0; rank--) {
 		for (int file = 0; file < 8; file++) {
 			piece_t p = piece_at(b, (rank<<3) + file);
@@ -177,6 +185,8 @@ chessboard_t* init_chessboard(char fenstring[]) {
 	char* enpassant = strtok(NULL, " ");
 	if (enpassant[0] == '-') b->en_passant_square = -1;
 	else b->en_passant_square = string_to_square(enpassant);
+
+	b->key = hash_key(b);
 
 	// halfmove clock
 	char* halfmove = strtok(NULL, " ");
@@ -314,29 +324,45 @@ void print_game_history(chessboard_t* b) {
 	printf("\n");
 }
 
+inline unsigned can_ep(chessboard_t* b, int side) {
+	bitboard_t ep_mask = 1ull<<b->en_passant_square;
+	if (side) ep_mask <<= 8;
+	else ep_mask >>= 8;
+
+	ep_mask = ((ep_mask & (~0x8080808080808080ull))<<1)
+		| ((ep_mask & (~0x0101010101010101ull))>>1);
+
+	return !!(b->pieces[wpawn + 6*side] & ep_mask);
+}
+
 // assumes move is legal
 int play_move(chessboard_t* b, move_t m) {
-	unsigned from = m&0x3f;
+	int from = m&0x3f;
 	piece_t pick_up = piece_at(b, from);
 	piece_t put_down = pick_up;
 	if (piece_side(pick_up) != b->side) return 0;
 
-	unsigned to   = (m>>6)&0x3f;
+	int to   = (m>>6)&0x3f;
 	if (piece_side(piece_at(b, to)) == b->side) return 0;
-	unsigned flags = (m>>12)&0xf;
+	int flags = (m>>12)&0xf;
 	piece_t capture = pempty;
 	int oldfifty = b->fiftymove;
+	uint64_t key_update = zobrist_update_piece(pick_up, from)
+		^ zobrist_update_piece(put_down, to);
 
 	if (flags&0x8) {
 		if (pick_up != wpawn + 6*b->side) return 0;
 		unsigned char promo = flags&0x3;
 		if (promo > 3) return 0;
+
+		key_update ^= zobrist_update_piece(put_down, to);
 		put_down = wknight + 6*b->side + promo;
+		key_update ^= zobrist_update_piece(put_down, to);
 	}
 
 	if (flags&0x4) {
 		int capture_square = to;
-		if (!(flags&0x8) && flags&1) {
+		if (flags == 0x5) {
 			if (b->side) {
 				capture_square += 8;
 			} else {
@@ -346,21 +372,26 @@ int play_move(chessboard_t* b, move_t m) {
 		capture = piece_at(b, capture_square);
 		if (flags == 0x5 && capture != bpawn - 6*b->side) return 0;
 		if (piece_side(capture) != !b->side) return 0;
+		key_update ^= zobrist_update_piece(capture, capture_square);
 		b->pieces[capture] &= ~(1ull << capture_square);
 	}
 
 	unsigned char oldcr = b->castling_rights;
+
+	int flip = b->side ? 56 : 0;
 	if (flags == 0x3) { // queen castle = 0x3
 						// move rook three spaces right
-		// if (!bitboard_contains(b->pieces[wrook+6*b->side], flip)) return 0;
+		if (!bitboard_contains(b->pieces[wrook+6*b->side], flip)) return 0;
 		b->pieces[wrook + 6*b->side] ^= b->side ? flip_horizontal(0x9ull) : 0x9ull;
-		b->castling_rights &= 0x3 << (2 * !b->side);
+		key_update ^= zobrist_update_piece(wrook+6*b->side, flip);
+		key_update ^= zobrist_update_piece(wrook+6*b->side, 3^flip);
 	}
 	if (flags == 0x2) { // king castle = 0x2
-							   // move rook two spaces left
-		// if (!bitboard_contains(b->pieces[wrook+6*b->side], 7^flip)) return 0;
+						// move rook two spaces left
+		if (!bitboard_contains(b->pieces[wrook+6*b->side], 7^flip)) return 0;
 		b->pieces[wrook + 6*b->side] ^= b->side ? flip_horizontal(0xa0ull) : 0xa0ull;
-		b->castling_rights &= 0x3 << (2 * !b->side);
+		key_update ^= zobrist_update_piece(wrook+6*b->side, 5^flip);
+		key_update ^= zobrist_update_piece(wrook+6*b->side, 7^flip);
 	}
 
 	if (pick_up == wking + 6*b->side) {
@@ -368,7 +399,6 @@ int play_move(chessboard_t* b, move_t m) {
 	}
 
 	if (pick_up == wrook + 6*b->side) {
-		unsigned flip = 56*b->side;
 		if (from == flip) {
 			b->castling_rights &= ~(1<<(1+b->side*2));
 		}
@@ -377,7 +407,7 @@ int play_move(chessboard_t* b, move_t m) {
 		}
 	}
 	if (capture == brook - 6*b->side) {
-		unsigned flip = 56*!b->side;
+		int flip = 56*!b->side;
 		if (to == flip) {
 			b->castling_rights &= ~(1<<(1+(!b->side)*2));
 		}
@@ -386,16 +416,34 @@ int play_move(chessboard_t* b, move_t m) {
 		}
 	}
 
+	unsigned char cdiff = oldcr ^ b->castling_rights;
+	for (int i = 0; i < 4; i++)
+		if ((cdiff>>i)&1)
+			key_update ^= polyglot_random_array[768+i];
+
 	b->fiftymove = (pick_up == wpawn + 6*b->side || flags&0x4) ? 0 : b->fiftymove+1;
 
 	int oldep = b->en_passant_square;
+	if (oldep != -1) {
+		key_update ^= polyglot_random_array[772 + oldep%8];
+	}
 	b->en_passant_square = -1;
-	if (flags == 0x1) b->en_passant_square = (to+from) / 2;
+	if (flags == 0x1) {
+		b->en_passant_square = (from+to)/2;
+		if (can_ep(b, !b->side)) {
+			key_update ^= polyglot_random_array[772 + b->en_passant_square%8];
+		} else {
+			b->en_passant_square = -1;
+		}
+	}
+
+	key_update ^= polyglot_random_array[780];
 
 	b->pieces[pick_up] &= ~(1ull << from);
 	b->pieces[put_down] |= 1ull << to;
 	b->ply++;
 	b->side = !b->side;
+	b->key ^= key_update;
 
 	meta_move_t* mm = calloc(1, sizeof(meta_move_t));
 	mm->fiftymove = oldfifty;
@@ -416,6 +464,7 @@ int play_move(chessboard_t* b, move_t m) {
  * promotions
  * enpassant
  * castling
+ * zobrist hash
  */
 int undo_move(chessboard_t* b) {
 	meta_move_t* mm = b->moves;
@@ -429,9 +478,16 @@ int undo_move(chessboard_t* b) {
 	unsigned from = (m>>6)&0x3f;
 	unsigned to = m&0x3f;
 	unsigned flags = (m>>12)&0xf;
+	uint64_t key_update = zobrist_update_piece(pick_up, from)
+		^ zobrist_update_piece(put_down, to);
 
-	if (flags&0x8) put_down = bpawn - 6*b->side;
+	if (flags&0x8) {
+		key_update ^= zobrist_update_piece(put_down, to);
+		put_down = bpawn - 6*b->side;
+		key_update ^= zobrist_update_piece(put_down, to);
+	}
 	else if (piece_at(b, from) != pick_up) return 0;
+	int flip = b->side ? 0 : 56;
 	if (flags&0x4) {
 		int capture_square = from;
 		if (!(flags&0x8) && flags&1) {
@@ -441,22 +497,42 @@ int undo_move(chessboard_t* b) {
 			else capture_square += 8;
 		}
 		if (piece_side(capture) != b->side) return 0;
+		key_update ^= zobrist_update_piece(capture, capture_square);
 		b->pieces[capture] |= 1ull << capture_square;
 	}
+
 	if (flags == 0x3) {
 		b->pieces[brook - 6*b->side] ^= b->side ? 0x9ull : flip_horizontal(0x9ull);
+		key_update ^= zobrist_update_piece(brook - 6*b->side, 0^flip);
+		key_update ^= zobrist_update_piece(brook - 6*b->side, 3^flip);
 	}
 	if (flags == 0x2) {
 		b->pieces[brook - 6*b->side] ^= b->side ? 0xa0ull : flip_horizontal(0xa0ull);
+		key_update ^= zobrist_update_piece(brook - 6*b->side, 5^flip);
+		key_update ^= zobrist_update_piece(brook - 6*b->side, 7^flip);
 	}
+
+	unsigned char cdiff = mm->castling ^ b->castling_rights;
+	for (int i = 0; i < 4; i++)
+		if ((cdiff>>i)&1)
+			key_update ^= polyglot_random_array[768+i];
+
+	key_update ^= polyglot_random_array[780];
 
 	b->fiftymove = mm->fiftymove;
 	b->castling_rights = mm->castling;
+	if (b->en_passant_square != -1) {
+		key_update ^= polyglot_random_array[772 + (b->en_passant_square%8)];
+	}
 	b->en_passant_square = mm->enpassant;
+	if (b->en_passant_square != -1) {
+		key_update ^= polyglot_random_array[772 + (b->en_passant_square%8)];
+	}
 	b->pieces[pick_up] &= ~(1ull << from);
 	b->pieces[put_down] |= 1ull << to;
 	b->ply--;
 	b->side = !b->side;
+	b->key ^= key_update;
 
 	b->moves = mm->next;
 	free(mm);
@@ -520,10 +596,12 @@ inline bitboard_t get_attacked_squares(chessboard_t* b) {
 		& ~b->pieces[wking + 6*b->side];
 
 	bitboard_t attacked_squares = 0ull;
-	bitboard_t enemy = pieces_color(b, !b->side);
-	while (enemy) {
-		int position = bitboard_poplsb(&enemy);
-		attacked_squares |= potential_moves(b, kingless, piece_at(b, position), position, 1);
+	for (int i = bpawn-6*b->side; i <= bking-6*b->side; i++) {
+		bitboard_t enemy = b->pieces[i];
+		while (enemy) {
+			int position = bitboard_poplsb(&enemy);
+			attacked_squares |= potential_moves(b, kingless, i, position, 1);
+		}
 	}
 	return attacked_squares;
 }
@@ -542,10 +620,10 @@ moves_t generate_moves(chessboard_t* b) {
 	bitboard_t enpassant_pawn = b->side ? enpassant << 8 : enpassant >> 8;
 
 	// TODO: fix this - shouldnt ever happen
-	// if (!b->pieces[wking + 6*b->side]) {
-	// 	print_chessboard(b);
-	// 	return moves;
-	// }
+	if (!b->pieces[wking + 6*b->side]) {
+		print_chessboard(b);
+		return moves;
+	}
 	int king = bitboard_lowest(b->pieces[wking + 6*b->side]);
 	bitboard_t options = king_attacks[king] & ~(attacked_squares | our);
 	append_all_options(&moves, king, options & other, 0x4);
@@ -804,6 +882,10 @@ unsigned long long perft(chessboard_t* b, int depth, int print, unsigned long lo
 	if (total_visited)
 		++*total_visited;
 	if (depth == 0) return 1;
+	if (b->key != hash_key(b)) {
+		printf(".");
+		b->key = hash_key(b);
+	}
 
 	unsigned long long r = 0;
 	moves_t moves = generate_moves(b);
@@ -843,16 +925,19 @@ unsigned long long perft(chessboard_t* b, int depth, int print, unsigned long lo
 	return r;
 }
 
-// TODO: threefold repetition
-inline game_result_t game_result(chessboard_t* b) {
-	int is_draw = 1;
+inline unsigned draw_material(chessboard_t* b) {
 	for (int i = 0; i < 12; i++) {
 		if (i != wking && i != bking && b->pieces[i]) {
-			is_draw = 0;
-			break;
+			return 0;
 		}
 	}
-	if (is_draw) return draw;
+	return 1;
+}
+
+// TODO: threefold repetition
+inline game_result_t game_result(chessboard_t* b) {
+	if (draw_material(b))
+		return draw;
 
 	// TODO: is there a way to do this without generating all the moves??
 	moves_t moves = generate_moves(b);
@@ -864,6 +949,6 @@ inline game_result_t game_result(chessboard_t* b) {
 			return checkmate;
 		return draw;
 	}
-	if (b->fiftymove >= 50) return draw;
+	if (b->fiftymove >= 100) return draw;
 	return ongoing;
 }

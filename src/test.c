@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/time.h>
+#include <unistd.h>
 
 #include "globals.h"
 #include "bitboard.h"
@@ -374,6 +375,11 @@ void test_chess(void) {
 		assert(b->pieces[i] == (i<6 ? positions[i] : flip_horizontal(positions[i-6])));
 	}
 
+	assert(hash_key(b) == 0x463b96181691fc9cull);
+	assert(b->key == hash_key(b));
+	b->castling_rights ^= 0x3<<2;
+	assert(hash_key(b) == 0xfdb313fa7a2b11f5);
+
 	free(b);
 
 	b = init_chessboard(onlykings);
@@ -446,6 +452,37 @@ void test_chess(void) {
 	play_move(b, string_to_move("d8h4"));
 	assert(game_result(b) == checkmate);
 	free(b);
+
+	b = init_chessboard("4k3/8/8/8/8/8/8/R3KR2 w Q - 0 1");
+	play_move(b, string_to_move("a1a2"));
+	assert(b->key == hash_key(b));
+	undo_move(b);
+	assert(b->key ==  hash_key(b));
+	free(b);
+
+	b = init_chessboard("4k3/8/8/8/8/8/8/R3KR2 w Q - 0 1");
+	moves = generate_moves(b);
+	for (int i = 0; i < moves.num_moves; i++) {
+		play_move(b, moves.moves[i]);
+		assert(b->key == hash_key(b));
+		b->key = hash_key(b);
+		undo_move(b);
+		assert(b->key == hash_key(b));
+		b->key = hash_key(b);
+	}
+	free(moves.moves);
+	free(b);
+
+	b = init_chessboard(testfen);
+	moves = generate_moves(b);
+	for (int i = 0; i < moves.num_moves; i++) {
+		play_move(b, moves.moves[i]);
+		assert(b->key == hash_key(b));
+		undo_move(b);
+		assert(b->key == hash_key(b));
+	}
+	free(moves.moves);
+	free(b);
 }
 
 void test_magic(void) {
@@ -512,8 +549,17 @@ int play_out_position(char* fen, game_result_t expect) {
 	chessboard_t* b = init_chessboard(fen);
 	print_chessboard(b);
 	while (game_result(b) == ongoing) {
+		assert(b->key == hash_key(b));
+		print_chessboard(b);
+		printf("\n");
 		best_move_t move = best_move(b);
 		play_move(b, move.move);
+		if (b->key != hash_key(b)) {
+
+			char string[6] = {0};
+			move_to_string(move.move, string);
+			printf("%s\n", string);
+		}
 	}
 	game_result_t result = game_result(b);
 	print_chessboard(b);
@@ -585,14 +631,14 @@ char* checkmates[] = {
 	"4k3/8/8/8/8/8/8/R3K2R w KQ - 0 1",
 	"2k5/4Q3/1K6/8/8/8/8/8 w - - 0 1",
 	"k7/4Q3/1K6/8/8/8/8/8 w - - 0 1",
+	"4r2k/1p3rbp/2p1N1p1/p3n3/P2NB1nq/1P6/4R1P1/B1Q2RK1 b - - 4 32",
+	"4k3/8/8/8/8/8/8/3QKQ2 w - - 0 1",
+	"4k3/8/8/8/8/8/8/QQ2K3 w - - 0 1",
+	"1k6/7Q/1K6/8/8/8/8/8 w - - 0 1",
 
 	// "4k3/8/8/8/8/8/8/3RKR2 w - - 0 1",
-	// "4k3/8/8/8/8/8/8/3QKQ2 w - - 0 1",
-	// "4k3/8/8/8/8/8/8/QQ2K3 w - - 0 1",
 	// "4k3/8/8/8/8/8/8/Q3K3 w - - 0 1",
-	// "1k6/7Q/1K6/8/8/8/8/8 w - - 0 1",
 
-	// "4r2k/1p3rbp/2p1N1p1/p3n3/P2NB1nq/1P6/4R1P1/B1Q2RK1 b - - 4 32",	// TODO: once we find checkmate, stop searching
 	// "8/k7/3p4/p2P1p2/P2P1P2/8/8/K7 w - - 0 1",
 
 };
@@ -602,6 +648,7 @@ void test_engine(void) {
 		assert(play_out_position(checkmates[i], checkmate));
 	}
 
+	// printf("puzzles\n");
 	// for (unsigned i = 0; i < sizeof(engine_puzzles)/sizeof(engine_puzzles[0]); i++) {
 	// 	destroy_hash_table();
 	// 	init_hash_table();

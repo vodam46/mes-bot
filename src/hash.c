@@ -5,49 +5,59 @@
 #include "hash.h"
 #include "chess.h"
 
-unsigned hash_table_size = 8;
-hash_table_t table = {0};
+unsigned hash_table_size = 128;
+hash_table_t high_depth = {0};
+hash_table_t always = {0};
 
 void init_hash_table(void) {
-	table.size = (hash_table_size * 1024 * 1024) / sizeof(hash_element_t);
-	table.num_elements = 0;
-	table.elements = calloc(table.size, sizeof(hash_element_t));
-	if (table.elements == NULL) {
+	unsigned size = (hash_table_size * 1024 * 1024) / sizeof(hash_element_t);
+	high_depth.size = size;
+	high_depth.num_elements = 0;
+	high_depth.elements = calloc(size, sizeof(hash_element_t));
+
+	always.size = size;
+	always.num_elements = 0;
+	always.elements = calloc(size, sizeof(hash_element_t));
+
+	if (high_depth.elements == NULL || always.elements == NULL) {
 		printf("Not enough memory\n");
 		exit(1);
 	}
-	for (unsigned i = 0; i < table.size; i++) {
-		table.elements[i].type = node_empty;
+	for (unsigned i = 0; i < high_depth.size; i++) {
+		high_depth.elements[i].type = node_empty;
+		always.elements[i].type = node_empty;
 	}
 }
 
 void destroy_hash_table(void) {
-	free(table.elements);
-	table = (hash_table_t){0};
+	free(high_depth.elements);
+	high_depth = (hash_table_t){0};
+	free(always.elements);
+	always = (hash_table_t){0};
 }
 
+piece_t polyglot_piece_reorder[12] = {0, 2, 4, 6, 8, 10, 1, 3, 5, 7, 9, 11};
+inline uint64_t zobrist_update_piece(piece_t piece, int square) {
+	return polyglot_random_array[polyglot_piece_reorder[piece]*64 + square^56];
+}
 uint64_t hash_key(chessboard_t* b) {
 	uint64_t key = 0ull;
 	for (int p = 0; p < 12; p++) {
 		bitboard_t pieces = b->pieces[p];
 		while (pieces) {
-			int pos = bitboard_lowest(pieces);
-			pieces &= ~(1ull<<pos);
-			key ^= polyglot_random_array[p*64 + pos];
+			key ^= zobrist_update_piece(p, bitboard_poplsb(&pieces));
 		}
 	}
 
-	unsigned char c = b->castling_rights;
 	for (int i = 0; i < 4; i++) {
-		if ((c>>i)&1) {
+		if ((b->castling_rights>>i)&1)
 			key ^= polyglot_random_array[768+i];
-		}
 	}
 
-	if (b->en_passant_square != -1) {
-		// TODO: check if theres a pawn able to capture
-		key ^= polyglot_random_array[772 + b->en_passant_square/8];
-	}
+	if (b->en_passant_square != -1)
+		if (can_ep(b, b->side)) {
+			key ^= polyglot_random_array[772 + b->en_passant_square%8];
+		}
 
 	if (!b->side) {
 		key ^= polyglot_random_array[780];
@@ -56,82 +66,45 @@ uint64_t hash_key(chessboard_t* b) {
 	return key;
 }
 
-const int hash_growth_factor = 2;
-
 void hash_clear_unused(chessboard_t* b) {
+	if (high_depth.num_elements == 0)
+		return;
+
 	unsigned char piece_count = bitboard_count(pieces_color(b, 0) |
 			pieces_color(b, 1));
 
-	for (unsigned i = 0; i < table.size; i++) {
-		if (table.elements[i].type == node_searching)
-			printf("node error\n");
-
-		if (table.elements[i].type != node_empty) {
-			if (table.elements[i].piece_count > piece_count
-					|| table.elements[i].age < b->ply-b->fiftymove) {
-				table.elements[i].type = node_empty;
-				table.num_elements--;
+	for (unsigned i = 0; i < high_depth.size; i++) {
+		if (high_depth.elements[i].type != node_empty) {
+			if (high_depth.elements[i].piece_count > piece_count
+					|| high_depth.elements[i].age < b->ply-b->fiftymove) {
+				high_depth.elements[i].type = node_empty;
+				high_depth.num_elements--;
 			}
 		}
 	}
 }
 
-void hash_realloc(void) {
-	unsigned new_size = table.size*hash_growth_factor;
-	printf("%lu Mb\n", new_size*sizeof(hash_element_t) / 1024 / 1024);
-	hash_element_t* new_arr = calloc(new_size, sizeof(hash_element_t));
-	for (unsigned i = 0; i < new_size; i++) new_arr[i].type = node_empty;
-
-	for (unsigned i = 0; i < table.size; i++) {
-		hash_element_t e = table.elements[i];
-		if (e.type == node_empty) continue;
-		int index = e.key % new_size;
-		while (new_arr[index].type != node_empty) {
-			if (new_arr[index].key == e.key) break;
-			index++;
-			index%=new_size;
-		}
-		new_arr[index] = e;
-	}
-	free(table.elements);
-
-	table.elements = new_arr;
-	table.size = new_size;
-}
-
 hash_element_t hash_get(uint64_t key) {
-	unsigned index = key % table.size;
-
-	while (table.elements[index].type != node_empty) {
-		if (table.elements[index].key == key) {
-			return table.elements[index];
-		}
-		index++;
-		if (index >= table.size) {
-			index = 0;
-		}
-	}
+	unsigned index = key % high_depth.size;
+	hash_element_t elem = high_depth.elements[index];
+	if (elem.key == key)
+		return elem;
+	elem = always.elements[index];
+	if (elem.key == key)
+		return elem;
 	return (hash_element_t){0};
 }
 
-hash_element_t* hash_set(uint64_t key) {
-	if (table.num_elements*hash_growth_factor >= table.size) {
-		hash_realloc();
+void hash_set(uint64_t key, hash_element_t elem) {
+	unsigned index = key % high_depth.size;
+	if (high_depth.elements[index].type == node_empty) {
+		high_depth.num_elements++;
+		high_depth.elements[index] = elem;
+		return;
+	} else if (high_depth.elements[index].depth < elem.depth) {
+		high_depth.elements[index] = elem;
 	}
-	unsigned index = key % table.size;
-
-	while (table.elements[index].type != node_empty) {
-		if (table.elements[index].key == key) {
-			return &table.elements[index];
-		}
-		index++;
-		if (index >= table.size) {
-			index = 0;
-		}
-	}
-	table.num_elements++;
-	table.elements[index].key = key;
-	return &table.elements[index];
+	always.elements[index] = elem;
 }
 
 
